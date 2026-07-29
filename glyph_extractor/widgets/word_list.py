@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPalette
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QKeyEvent, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QListWidget,
@@ -55,18 +55,6 @@ class WordListWidget(QWidget):
             self.list_widget.addItem(item)
         self._suppress_changed = False
 
-    def _apply_edit_color(self, item: QListWidgetItem, word: Word) -> None:
-        """Color the item green if the user has edited its text.
-
-        Unedited items use the palette's default text color so they remain
-        visible under both light and dark themes.
-        """
-        if word.text != word.original_text:
-            item.setForeground(QColor(0, 170, 0))
-        else:
-            default_color = self.list_widget.palette().color(QPalette.Text)
-            item.setForeground(default_color)
-
     def get_words(self) -> List[Word]:
         return self._words
 
@@ -101,6 +89,27 @@ class WordListWidget(QWidget):
         self._apply_edit_color(item, word)
         self.words_changed.emit()
 
+    def _apply_edit_color(self, item: QListWidgetItem, word: Word) -> None:
+        """Color the item green if it is marked or has been edited.
+
+        Unedited/unmarked items use the palette's default text color so they
+        remain visible under both light and dark themes.
+        """
+        if word.marked or word.text != word.original_text:
+            item.setForeground(QColor(0, 170, 0))
+        else:
+            default_color = self.list_widget.palette().color(QPalette.Text)
+            item.setForeground(default_color)
+
+    def _toggle_mark(self) -> None:
+        row = self.list_widget.currentRow()
+        if row < 0 or row >= len(self._words):
+            return
+        word = self._words[row]
+        word.marked = not word.marked
+        item = self.list_widget.item(row)
+        self._apply_edit_color(item, word)
+
     def delete_selected(self) -> None:
         row = self.list_widget.currentRow()
         if row < 0 or row >= len(self._words):
@@ -117,8 +126,20 @@ class WordListWidget(QWidget):
         else:
             self.word_selected.emit(None)
 
-    def keyPressEvent(self, event):  # noqa: N802 (Qt naming)
-        if event.key() == Qt.Key_Delete:
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 (Qt naming)
+        key = event.key()
+        if key == Qt.Key_Delete:
             self.delete_selected()
-        else:
-            super().keyPressEvent(event)
+            return
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            # Enter toggles the "green" marked state (only when not editing).
+            if not self.list_widget.state() == QAbstractItemView.EditingState:
+                self._toggle_mark()
+                return
+        # Printable character: enter edit mode immediately.
+        text = event.text()
+        if text and text.isprintable() and not event.modifiers():
+            row = self.list_widget.currentRow()
+            if 0 <= row < len(self._words):
+                self.list_widget.edit(self.list_widget.item(row))
+        super().keyPressEvent(event)

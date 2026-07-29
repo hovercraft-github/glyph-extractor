@@ -122,6 +122,15 @@ class MainWindow(QMainWindow):
         if not words:
             QMessageBox.information(self, "Nothing to export", "No words to export.")
             return
+        marked = [w for w in words if w.marked]
+        if not marked:
+            QMessageBox.information(
+                self,
+                "Nothing to export",
+                "No marked (green) words to export.\n"
+                "Press Enter on a word to mark it for export.",
+            )
+            return
         if self._image is None:
             QMessageBox.warning(self, "No image", "Open an image first.")
             return

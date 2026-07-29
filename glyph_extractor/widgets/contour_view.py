@@ -70,27 +70,31 @@ class ContourViewWidget(QWidget):
 
         for i, sym in enumerate(word.symbols):
             color = _COLORS[i % len(_COLORS)]
-            if not sym.contour_pts:
+            if not sym.parts:
                 continue
-            pts = np.array(
-                [[px - x + pad, py - y + pad] for px, py in sym.contour_pts],
-                dtype=np.int32,
-            )
-            # Fill the outer contour, then "punch" holes with background color.
-            cv2.fillPoly(canvas, [pts], color)
-            for hole in sym.hole_contours:
-                hole_pts = np.array(
-                    [[px - x + pad, py - y + pad] for px, py in hole],
+            # Render every part (external contour + its holes).
+            for part in sym.parts:
+                if not part.outer:
+                    continue
+                pts = np.array(
+                    [[px - x + pad, py - y + pad] for px, py in part.outer],
                     dtype=np.int32,
                 )
-                cv2.fillPoly(canvas, [hole_pts], (0, 0, 0))
-            cv2.polylines(canvas, [pts], True, color, 1)
-            for hole in sym.hole_contours:
-                hole_pts = np.array(
-                    [[px - x + pad, py - y + pad] for px, py in hole],
-                    dtype=np.int32,
-                )
-                cv2.polylines(canvas, [hole_pts], True, color, 1)
+                # Fill the outer contour, then "punch" holes with background color.
+                cv2.fillPoly(canvas, [pts], color)
+                for hole in part.holes:
+                    hole_pts = np.array(
+                        [[px - x + pad, py - y + pad] for px, py in hole],
+                        dtype=np.int32,
+                    )
+                    cv2.fillPoly(canvas, [hole_pts], (0, 0, 0))
+                cv2.polylines(canvas, [pts], True, color, 1)
+                for hole in part.holes:
+                    hole_pts = np.array(
+                        [[px - x + pad, py - y + pad] for px, py in hole],
+                        dtype=np.int32,
+                    )
+                    cv2.polylines(canvas, [hole_pts], True, color, 1)
 
         rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
         qimg = QImage(rgb.data, rgb.shape[1], rgb.shape[0], rgb.strides[0], QImage.Format_RGB888)

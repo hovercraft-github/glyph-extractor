@@ -20,6 +20,7 @@ CSV_HEADER = [
     "preview_path",
     "contour_pts",
     "hole_contours",
+    "parts",
     "bbox",
     "notes",
 ]
@@ -42,8 +43,9 @@ def _save_preview(image: np.ndarray, sym: Symbol, out_path: str) -> None:
 
 
 def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
-    """Export all symbols from all words to a CSV + preview PNGs.
+    """Export symbols from marked (green) words to a CSV + preview PNGs.
 
+    Only words whose ``marked`` flag is True are included in the export.
     Creates `<out_dir>/previews/` and writes `<out_dir>/step1_review.csv`.
     Returns the path to the written CSV.
     """
@@ -56,18 +58,33 @@ def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
         writer = csv.writer(f)
         writer.writerow(CSV_HEADER)
         for word in words:
+            if not word.marked:
+                continue
             for sym in word.symbols:
                 preview_name = f"g{sym_id:03d}.png"
                 preview_abs = os.path.join(previews_dir, preview_name)
                 _save_preview(image, sym, preview_abs)
                 preview_rel = f"previews/{preview_name}"
 
+                # Backward-compatible single-part fields (first part only).
                 contour_str = ";".join(f"{x},{y}" for x, y in sym.contour_pts)
-                # Serialize hole contours: each hole is "x,y;x,y;..." and
-                # holes are separated by "|".
                 hole_str = "|".join(
                     ";".join(f"{x},{y}" for x, y in hole) for hole in sym.hole_contours
                 )
+
+                # Full multi-part serialization:
+                #   parts are separated by "||"
+                #   within a part: outer contour "x,y;x,y;..." then "/" then
+                #   holes separated by "|", each "x,y;x,y;..."
+                part_strs = []
+                for part in sym.parts:
+                    outer_s = ";".join(f"{x},{y}" for x, y in part.outer)
+                    holes_s = "|".join(
+                        ";".join(f"{x},{y}" for x, y in hole) for hole in part.holes
+                    )
+                    part_strs.append(f"{outer_s}/{holes_s}")
+                parts_str = "||".join(part_strs)
+
                 bbox_str = ",".join(str(v) for v in sym.box)
                 notes = f"conf={sym.conf:.1f}"
 
@@ -81,6 +98,7 @@ def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
                         preview_rel,
                         contour_str,
                         hole_str,
+                        parts_str,
                         bbox_str,
                         notes,
                     ]

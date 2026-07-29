@@ -6,20 +6,20 @@ from typing import List, Tuple
 import cv2
 import numpy as np
 
-from .models import BBox, Symbol
+from .models import BBox, GlyphPart, Symbol
 
 
-def extract_contour_for_symbol(
+def extract_parts_for_symbol(
     gray: np.ndarray, box: BBox, pad: int = 2
-) -> Tuple[List[Tuple[int, int]], List[List[Tuple[int, int]]]]:
-    """Extract the outer contour and any hole contours for the symbol region.
+) -> List[GlyphPart]:
+    """Extract all glyph parts (external contours + their holes) for a symbol.
 
     Crops the grayscale image around the box (with padding), thresholds it,
-    runs cv2.findContours with RETR_TREE, and returns:
-      - the largest (outer) contour's points in absolute image coordinates
-      - a list of hole contours (children of the outer contour) in absolute coords
+    runs cv2.findContours with RETR_TREE, and returns a list of GlyphPart
+    objects — one per top-level (external) contour, each carrying its own
+    hole contours (children).  All coordinates are in absolute image space.
 
-    Returns ([], []) if no contour found.
+    Returns an empty list if no contour found.
     """
     img_h, img_w = gray.shape[:2]
     x, y, w, h = box
@@ -30,7 +30,7 @@ def extract_contour_for_symbol(
 
     crop = gray[y0:y1, x0:x1]
     if crop.size == 0:
-        return [], []
+        return []
 
     # Threshold: text is dark on light background (invert so text is white).
     # Use Otsu on the inverted image.
@@ -40,39 +40,41 @@ def extract_contour_for_symbol(
         thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE
     )
     if not contours:
-        return [], []
+        return []
 
-    # Find the largest contour — this is the outer glyph boundary.
-    largest_idx = max(range(len(contours)), key=lambda i: cv2.contourArea(contours[i]))
-    largest = contours[largest_idx]
-
-    outer_pts: List[Tuple[int, int]] = []
-    for pt in largest.reshape(-1, 2):
-        outer_pts.append((int(pt[0]) + x0, int(pt[1]) + y0))
-
-    # Collect hole contours: direct children of the largest contour in the
-    # hierarchy tree.  hierarchy shape is (1, N, 4) with
-    # [next, prev, first_child, parent].
-    hole_contours: List[List[Tuple[int, int]]] = []
+    parts: List[GlyphPart] = []
     if hierarchy is not None:
-        h = hierarchy[0]  # shape (N, 4)
-        # first_child of the largest contour
-        child_idx = h[largest_idx][2]
-        while child_idx != -1:
-            child = contours[child_idx]
-            pts: List[Tuple[int, int]] = []
-            for pt in child.reshape(-1, 2):
-                pts.append((int(pt[0]) + x0, int(pt[1]) + y0))
-            hole_contours.append(pts)
-            # move to next sibling
-            child_idx = h[child_idx][0]
+        h = hierarchy[0]  # shape (N, 4): [next, prev, first_child, parent]
+        for idx in range(len(contours)):
+            # A top-level (external) contour has parent == -1.
+            if h[idx][3] != -1:
+                continue
+            outer = _contour_to_pts(contours[idx], x0, y0)
+            holes: List[List[Tuple[int, int]]] = []
+            child_idx = h[idx][2]  # first_child
+            while child_idx != -1:
+                holes.append(_contour_to_pts(contours[child_idx], x0, y0))
+                child_idx = h[child_idx][0]  # next sibling
+            parts.append(GlyphPart(outer=outer, holes=holes))
+    else:
+        # No hierarchy — treat every contour as a standalone part.
+        for c in contours:
+            parts.append(GlyphPart(outer=_contour_to_pts(c, x0, y0)))
 
-    return outer_pts, hole_contours
+    return parts
+
+
+def _contour_to_pts(
+    contour: np.ndarray, offset_x: int, offset_y: int
+) -> List[Tuple[int, int]]:
+    """Convert an OpenCV contour array to a list of (x, y) tuples in image coords."""
+    pts: List[Tuple[int, int]] = []
+    for pt in contour.reshape(-1, 2):
+        pts.append((int(pt[0]) + offset_x, int(pt[1]) + offset_y))
+    return pts
 
 
 def fill_contours_for_symbols(gray: np.ndarray, symbols: List[Symbol]) -> None:
-    """Populate `contour_pts` and `hole_contours` for each symbol in-place."""
+    """Populate `parts` for each symbol in-place."""
     for sym in symbols:
-        outer, holes = extract_contour_for_symbol(gray, sym.box)
-        sym.contour_pts = outer
-        sym.hole_contours = holes
+        sym.parts = extract_parts_for_symbol(gray, sym.box)

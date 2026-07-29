@@ -9,6 +9,18 @@ BBox = Tuple[int, int, int, int]  # (x, y, w, h) in image coordinates
 
 
 @dataclass
+class GlyphPart:
+    """A single connected component of a glyph.
+
+    A glyph may consist of multiple parts (e.g. the dot and body of 'i').
+    Each part has one outer contour and zero or more hole contours.
+    """
+
+    outer: List[Tuple[int, int]] = field(default_factory=list)
+    holes: List[List[Tuple[int, int]]] = field(default_factory=list)
+
+
+@dataclass
 class Symbol:
     """A single glyph within a word."""
 
@@ -17,9 +29,36 @@ class Symbol:
     suggested_char: str             # original tesseract character
     box: BBox                       # tesseract box in image coords (x, y, w, h)
     conf: float                     # tesseract confidence for this symbol
-    contour_pts: List[Tuple[int, int]] = field(default_factory=list)
-    hole_contours: List[List[Tuple[int, int]]] = field(default_factory=list)
+    parts: List[GlyphPart] = field(default_factory=list)
     preview_path: str = ""
+
+    # --- Backward-compatible properties (derived from parts) ---
+
+    @property
+    def contour_pts(self) -> List[Tuple[int, int]]:
+        """Outer contour of the first part (for backward compatibility)."""
+        if self.parts:
+            return self.parts[0].outer
+        return []
+
+    @contour_pts.setter
+    def contour_pts(self, value: List[Tuple[int, int]]) -> None:
+        if not self.parts:
+            self.parts.append(GlyphPart())
+        self.parts[0].outer = value
+
+    @property
+    def hole_contours(self) -> List[List[Tuple[int, int]]]:
+        """Holes of the first part (for backward compatibility)."""
+        if self.parts:
+            return self.parts[0].holes
+        return []
+
+    @hole_contours.setter
+    def hole_contours(self, value: List[List[Tuple[int, int]]]) -> None:
+        if not self.parts:
+            self.parts.append(GlyphPart())
+        self.parts[0].holes = value
 
     @property
     def status(self) -> str:
@@ -42,6 +81,7 @@ class Word:
     box: BBox                       # word bounding box in image coords
     conf: float                     # average word confidence
     symbols: List[Symbol] = field(default_factory=list)
+    marked: bool = False              # user-toggled "green" state for export
 
     def set_text(self, new_text: str) -> bool:
         """Update the word text and propagate chars to symbols.
