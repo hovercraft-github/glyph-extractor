@@ -1,0 +1,1 @@
+"""GUI widgets for the Glyph Extractor."""

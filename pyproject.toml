@@ -1,0 +1,16 @@
+[project]
+name = "glyph-extractor"
+version = "0.1.0"
+description = "A PyQt5 desktop application for extracting glyph datasets from images using OCR and contour detection."
+requires-python = ">=3.13"
+dependencies = [
+    "numpy>=2.5.1",
+    "opencv-python-headless==4.11.0.86",
+    "pillow>=12.3.0",
+    "pyqt5>=5.15.11",
+    "pytesseract>=0.3.13",
+]
+license = { text = "GPL-3.0-or-later" }
+
+[tool.uv]
+constraint-dependencies = ["opencv-python==4.11.0.86", "opencv-python-headless==4.11.0.86"]
