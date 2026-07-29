@@ -18,6 +18,7 @@ class Symbol:
     box: BBox                       # tesseract box in image coords (x, y, w, h)
     conf: float                     # tesseract confidence for this symbol
     contour_pts: List[Tuple[int, int]] = field(default_factory=list)
+    hole_contours: List[List[Tuple[int, int]]] = field(default_factory=list)
     preview_path: str = ""
 
     @property

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import List
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QListWidget,
@@ -28,6 +29,10 @@ class WordListWidget(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
 
         self.list_widget = QListWidget()
+        # Increase font size by 20%.
+        font: QFont = self.list_widget.font()
+        font.setPointSizeF(font.pointSizeF() * 1.2)
+        self.list_widget.setFont(font)
         self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list_widget.setEditTriggers(
             QListWidget.DoubleClicked | QListWidget.EditKeyPressed
@@ -46,8 +51,21 @@ class WordListWidget(QWidget):
         for word in words:
             item = QListWidgetItem(word.text)
             item.setFlags(item.flags() | Qt.ItemIsEditable)
+            self._apply_edit_color(item, word)
             self.list_widget.addItem(item)
         self._suppress_changed = False
+
+    def _apply_edit_color(self, item: QListWidgetItem, word: Word) -> None:
+        """Color the item green if the user has edited its text.
+
+        Unedited items use the palette's default text color so they remain
+        visible under both light and dark themes.
+        """
+        if word.text != word.original_text:
+            item.setForeground(QColor(0, 170, 0))
+        else:
+            default_color = self.list_widget.palette().color(QPalette.Text)
+            item.setForeground(default_color)
 
     def get_words(self) -> List[Word]:
         return self._words
@@ -80,6 +98,7 @@ class WordListWidget(QWidget):
             self._suppress_changed = False
             return
         word.set_text(new_text)
+        self._apply_edit_color(item, word)
         self.words_changed.emit()
 
     def delete_selected(self) -> None:

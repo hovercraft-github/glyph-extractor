@@ -78,6 +78,10 @@ def extract_words(image: np.ndarray) -> List[Word]:
         wbox = _box_from_data(data, i, image.shape[0])
         wx, wy, ww, wh = wbox
 
+        # Filter out vertically-oriented words (height > width).
+        if wh > ww:
+            continue
+
         # Collect char boxes that fall inside this word bbox.
         # Allow a small tolerance so chars slightly outside still match.
         tol = max(2, wh // 4)

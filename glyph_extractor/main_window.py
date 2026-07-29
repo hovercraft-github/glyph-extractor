@@ -62,6 +62,10 @@ class MainWindow(QMainWindow):
         self.word_list.word_selected.connect(self._on_word_selected)
         self.word_list.words_changed.connect(self._on_words_changed)
 
+        # Synchronize zoom between the two right panels.
+        self.symbol_view.zoom_changed.connect(self._on_zoom_changed)
+        self.contour_view.zoom_changed.connect(self._on_zoom_changed)
+
         # --- Menu ---
         self._build_menu()
 
@@ -137,6 +141,11 @@ class MainWindow(QMainWindow):
     def _on_word_selected(self, word) -> None:
         self.symbol_view.show_word(word)
         self.contour_view.show_word(word)
+
+    def _on_zoom_changed(self, zoom: float) -> None:
+        """Apply the same zoom to both right panels."""
+        self.symbol_view.set_zoom(zoom)
+        self.contour_view.set_zoom(zoom)
 
     def _on_words_changed(self) -> None:
         # Re-show current word to refresh panels after an edit.

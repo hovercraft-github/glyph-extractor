@@ -19,6 +19,7 @@ CSV_HEADER = [
     "status",
     "preview_path",
     "contour_pts",
+    "hole_contours",
     "bbox",
     "notes",
 ]
@@ -62,6 +63,11 @@ def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
                 preview_rel = f"previews/{preview_name}"
 
                 contour_str = ";".join(f"{x},{y}" for x, y in sym.contour_pts)
+                # Serialize hole contours: each hole is "x,y;x,y;..." and
+                # holes are separated by "|".
+                hole_str = "|".join(
+                    ";".join(f"{x},{y}" for x, y in hole) for hole in sym.hole_contours
+                )
                 bbox_str = ",".join(str(v) for v in sym.box)
                 notes = f"conf={sym.conf:.1f}"
 
@@ -74,6 +80,7 @@ def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
                         sym.status,
                         preview_rel,
                         contour_str,
+                        hole_str,
                         bbox_str,
                         notes,
                     ]
