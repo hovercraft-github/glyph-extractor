@@ -9,6 +9,7 @@ dependencies = [
     "pillow>=12.3.0",
     "pyqt5>=5.15.11",
     "pytesseract>=0.3.13",
+    "scipy>=1.18.0",
 ]
 license = { text = "GPL-3.0-or-later" }
 
