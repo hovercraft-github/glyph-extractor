@@ -134,6 +134,9 @@ class MainWindow(QMainWindow):
         if self._image is None:
             QMessageBox.warning(self, "No image", "Open an image first.")
             return
+        # Compute baseline for each marked word.
+        for w in marked:
+            w.compute_baseline()
         out_dir = QFileDialog.getExistingDirectory(self, "Select output directory")
         if not out_dir:
             return

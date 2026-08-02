@@ -23,6 +23,11 @@ CSV_HEADER = [
     "parts",
     "bbox",
     "notes",
+    "word_id",
+    "word_text",
+    "sym_idx",
+    "word_bbox",
+    "word_baseline",
 ]
 
 
@@ -101,6 +106,11 @@ def export_csv(words: List[Word], image: np.ndarray, out_dir: str) -> str:
                         parts_str,
                         bbox_str,
                         notes,
+                        word.index,
+                        word.text,
+                        sym.index,
+                        ",".join(str(v) for v in word.box),
+                        word.baseline_y,
                     ]
                 )
                 sym_id += 1

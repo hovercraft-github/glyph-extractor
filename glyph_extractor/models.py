@@ -82,6 +82,7 @@ class Word:
     conf: float                     # average word confidence
     symbols: List[Symbol] = field(default_factory=list)
     marked: bool = False              # user-toggled "green" state for export
+    baseline_y: int = 0             # estimated baseline y (image top-down coords)
 
     def set_text(self, new_text: str) -> bool:
         """Update the word text and propagate chars to symbols.
@@ -94,3 +95,24 @@ class Word:
         for sym, ch in zip(self.symbols, new_text):
             sym.char = ch
         return True
+
+    def compute_baseline(self) -> int:
+        """Estimate the baseline y-coordinate from symbol bbox bottoms.
+
+        Most letters sit on the baseline, so their bottom-y (bbox.y + bbox.h)
+        equals the baseline. Descenders (у, р, ф, д, ц, щ) go below it.
+        We take the minimum (highest) bottom-y, which is likely the baseline
+        for non-descending letters. Using the 25th percentile is more robust
+        against outliers.
+
+        Returns the baseline y in image top-down coordinates.
+        """
+        import numpy as np
+        if not self.symbols:
+            return self.box[1] + self.box[3]  # fallback: bottom of word bbox
+        bottoms = [sym.box[1] + sym.box[3] for sym in self.symbols]
+        # The baseline is at the top of the bottom cluster — use the 25th
+        # percentile (most letters are non-descenders).
+        baseline = int(np.percentile(bottoms, 25))
+        self.baseline_y = baseline
+        return baseline
