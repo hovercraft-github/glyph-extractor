@@ -83,6 +83,7 @@ class Word:
     symbols: List[Symbol] = field(default_factory=list)
     marked: bool = False              # user-toggled "green" state for export
     baseline_y: int = 0             # estimated baseline y (image top-down coords)
+    committed: bool = False         # True once glyphs have been added to a project
 
     def set_text(self, new_text: str) -> bool:
         """Update the word text and propagate chars to symbols.

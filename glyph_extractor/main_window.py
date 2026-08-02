@@ -327,11 +327,15 @@ class MainWindow(QMainWindow):
     def _on_mark_changed(self, word) -> None:
         """Called when a word's marked state changes.
 
-        If a project is open and the word is now marked, commit its glyphs to
-        the project DB. Unmarking does NOT remove already-collected glyphs
-        (removal is done from the glyph browser).
+        If a project is open and the word is now marked AND not yet committed,
+        commit its glyphs to the project DB. Re-editing an already-committed
+        word does not re-add duplicates. Unmarking does NOT remove
+        already-collected glyphs (removal is done from the glyph browser) but
+        does clear the green visual state.
         """
         if self._project is None or not word.marked:
+            return
+        if word.committed:
             return
         if self._image is None:
             return
@@ -342,6 +346,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.warning(self, "Project error", f"Failed to add glyphs:\n{exc}")
             return
+        word.committed = True
         self.glyph_browser.refresh()
         self._update_status_bar()
         if added:

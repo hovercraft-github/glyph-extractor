@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..project import GlyphInstance, Project
-from ..vectorize import vectorize_instance
+from ..vectorize import advance_width_em, normalize_to_upem, vectorize_instance
 from .vector_preview import VectorPreviewWidget
 
 
@@ -198,18 +198,25 @@ class GlyphBrowserWidget(QWidget):
         self._refresh_enabled()
 
     def _show_instance(self, inst: Optional[GlyphInstance]) -> None:
-        if inst is None:
+        if inst is None or self._project is None:
             self.vector_preview.clear()
             self.metrics_view.clear()
             return
         try:
-            vg = vectorize_instance(inst)
+            vg = normalize_to_upem(inst, self._project)
+            adv = advance_width_em(inst, self._project)
         except Exception as exc:  # noqa: BLE001
             self.vector_preview.clear()
             self.metrics_view.setPlainText(f"Vectorization failed:\n{exc}")
             return
-        self.vector_preview.set_glyph(vg, baseline_y=inst.baseline_y)
-        self.metrics_view.setPlainText(_metrics_text(inst))
+        self.vector_preview.set_glyph(
+            vg,
+            upem=self._project.units_per_em,
+            ascent=self._project.ascent,
+            descent=self._project.descent,
+            advance=adv,
+        )
+        self.metrics_view.setPlainText(_metrics_text(inst, self._project))
 
     # --- Internal: controls ---
 
@@ -296,12 +303,14 @@ def _pixmap_from_instance(inst: GlyphInstance) -> Optional[QIcon]:
         return None
 
 
-def _metrics_text(inst: GlyphInstance) -> str:
+def _metrics_text(inst: GlyphInstance, proj: Project) -> str:
     x, y, w, h = inst.bbox
+    adv_em = advance_width_em(inst, proj)
     return (
         f"char: {inst.char}   codepoint: U+{inst.codepoint.upper()}\n"
+        f"UPEM: {proj.units_per_em}   ascent: {proj.ascent}   descent: {proj.descent}\n"
         f"bbox: x={x} y={y} w={w} h={h} (px)\n"
-        f"advance width: {inst.advance_width_px} px\n"
+        f"advance width: {inst.advance_width_px} px  →  {adv_em} em units\n"
         f"baseline y: {inst.baseline_y} px   "
         f"baseline offset: {inst.baseline_y - (y + h)} px (descender if <0)\n"
         f"OCR conf: {inst.ocr_conf:.1f}\n"

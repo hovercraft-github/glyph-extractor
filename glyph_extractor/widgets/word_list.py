@@ -87,16 +87,24 @@ class WordListWidget(QWidget):
             self._suppress_changed = False
             return
         word.set_text(new_text)
+        # An edit just finished: mark the word green immediately so its
+        # glyphs are collected without requiring a second Enter. Re-baseline
+        # the "original" text to the new value so unmarking clears green.
+        word.original_text = new_text
+        word.marked = True
         self._apply_edit_color(item, word)
         self.words_changed.emit()
+        self.word_marked.emit(word)
 
     def _apply_edit_color(self, item: QListWidgetItem, word: Word) -> None:
-        """Color the item green if it is marked or has been edited.
+        """Color the item green if it is marked (collected into the project).
 
-        Unedited/unmarked items use the palette's default text color so they
-        remain visible under both light and dark themes.
+        Unmarked items use the palette's default text color so they remain
+        visible under both light and dark themes. The "edited but unmarked"
+        case is intentionally not green: marking is the single source of
+        truth for "collected".
         """
-        if word.marked or word.text != word.original_text:
+        if word.marked:
             item.setForeground(QColor(0, 170, 0))
         else:
             default_color = self.list_widget.palette().color(QPalette.Text)

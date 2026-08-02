@@ -207,7 +207,13 @@ class Project:
     # --- Read-only summaries ---
 
     def codepoints(self) -> List[str]:
-        return sorted(self.glyphs.keys())
+        """Codepoints sorted by numeric value (not lexicographic hex)."""
+        def _key(cp: str) -> int:
+            try:
+                return int(cp, 16)
+            except (ValueError, TypeError):
+                return 0
+        return sorted(self.glyphs.keys(), key=_key)
 
     def instance_count(self) -> int:
         return sum(len(v) for v in self.glyphs.values())

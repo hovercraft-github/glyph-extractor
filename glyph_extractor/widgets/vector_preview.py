@@ -1,8 +1,13 @@
-"""Widget that renders a VectorizedGlyph's bezier curves onto a QPainter canvas.
+"""Widget that renders a UPEM-normalized glyph inside an em box.
 
-Used inside the glyph browser to preview the vectorized outline of a glyph
-instance. The curves are drawn in image-pixel coordinates, auto-fit to the
-widget size, with the baseline shown as a horizontal reference line.
+The glyph's bezier curves are given in **font units** (y-up, baseline at 0,
+scaled to the project's units-per-em). The widget draws:
+- the em box as a light background (from descent to ascent, width = advance),
+- a green baseline line at y = 0,
+- the glyph outline filled in dark gray with holes punched out.
+
+Used inside the glyph browser to preview exactly how the glyph will appear in
+the assembled font.
 """
 from __future__ import annotations
 
@@ -17,30 +22,44 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QWidget
 
-from ..vectorize import BezierSegment, VectorizedGlyph
+from ..vectorize import VectorizedGlyph
 
 
 class VectorPreviewWidget(QWidget):
-    """Renders a VectorizedGlyph (bezier outlines) scaled to fit the widget."""
+    """Renders a UPEM-normalized VectorizedGlyph inside its em box."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(120, 120)
+        self.setMinimumSize(160, 200)
+        # Normalized glyph (font units, y-up, baseline=0).
         self._vg: Optional[VectorizedGlyph] = None
-        self._baseline_y: Optional[float] = None  # image px (top-down)
-        # Bounding box of the glyph in image px, used for fitting.
-        self._bbox = (0.0, 0.0, 1.0, 1.0)
+        # Em-box metrics in font units.
+        self._upem: int = 1000
+        self._ascent: int = 800
+        self._descent: int = -200
+        self._advance: int = 600  # glyph advance width in font units
 
-    def set_glyph(self, vg: Optional[VectorizedGlyph], baseline_y: Optional[float] = None) -> None:
+    def set_glyph(
+        self,
+        vg: Optional[VectorizedGlyph],
+        upem: int = 1000,
+        ascent: int = 800,
+        descent: int = -200,
+        advance: int = 600,
+    ) -> None:
+        """Set the normalized glyph + em-box metrics and repaint.
+
+        All geometry is in font units (y-up, baseline at 0).
+        """
         self._vg = vg
-        self._baseline_y = baseline_y
-        if vg is not None:
-            self._bbox = _compute_bbox(vg)
+        self._upem = max(1, upem)
+        self._ascent = ascent
+        self._descent = descent
+        self._advance = max(1, advance)
         self.update()
 
     def clear(self) -> None:
         self._vg = None
-        self._baseline_y = None
         self.update()
 
     # --- Painting ---
@@ -48,54 +67,70 @@ class VectorPreviewWidget(QWidget):
     def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor(245, 245, 245))
 
+        # Em box in font units: x in [0, advance], y in [descent, ascent].
+        box_w = self._advance
+        box_h = self._ascent - self._descent  # total em-box height
+        if box_w <= 0 or box_h <= 0:
+            painter.fillRect(self.rect(), QColor(245, 245, 245))
+            return
+
+        # Fit the em box into the widget with padding, preserving aspect ratio.
+        pad = 16
+        avail_w = max(1, self.width() - 2 * pad)
+        avail_h = max(1, self.height() - 2 * pad)
+        scale = min(avail_w / box_w, avail_h / box_h)
+        draw_w = box_w * scale
+        draw_h = box_h * scale
+        ox = pad + (avail_w - draw_w) / 2
+        # Center vertically.
+        oy = pad + (avail_h - draw_h) / 2
+
+        # --- Em-box background ---
+        em_rect_color = QColor(230, 230, 230)
+        painter.fillRect(
+            int(ox), int(oy), int(draw_w) + 1, int(draw_h) + 1, em_rect_color
+        )
+        # Border around the em box.
+        painter.setPen(QPen(QColor(160, 160, 160), 1))
+        painter.drawRect(int(ox), int(oy), int(draw_w), int(draw_h))
+
+        # Map a font-unit point (x, y) to widget pixels.
+        # Font y is up; widget y is down. Baseline (y=0) sits at
+        # oy + ascent*scale (i.e. descent's worth of space below it).
+        baseline_screen_y = oy + self._ascent * scale
+
+        def to_screen(fx: float, fy: float) -> QPointF:
+            return QPointF(ox + fx * scale, baseline_screen_y - fy * scale)
+
+        # --- Baseline (green) ---
+        pen = QPen(QColor(0, 170, 0), 1)
+        painter.setPen(pen)
+        painter.drawLine(
+            int(ox), int(baseline_screen_y),
+            int(ox + draw_w), int(baseline_screen_y),
+        )
+
+        # --- Glyph outline ---
         if self._vg is None or not self._vg.parts:
             painter.setPen(QColor(150, 150, 150))
             painter.drawText(self.rect(), Qt.AlignCenter, "No vector data")
             return
 
-        # Compute scale + offset to fit the glyph bbox into the widget with padding.
-        pad = 12
-        w = max(1, self.width() - 2 * pad)
-        h = max(1, self.height() - 2 * pad)
-        bx, by, bw, bh = self._bbox
-        if bw <= 0 or bh <= 0:
-            return
-        scale = min(w / bw, h / bh)
-        # Center horizontally; align baseline near the bottom third.
-        ox = pad + (w - bw * scale) / 2 - bx * scale
-        # Map image top-down y to widget top-down y (no flip here — preview is
-        # a direct rendering of the image-space outline).
-        oy = pad + (h - bh * scale) / 2 - by * scale
-
-        def to_screen(px: float, py: float) -> QPointF:
-            return QPointF(ox + px * scale, oy + py * scale)
-
-        # Baseline reference line.
-        if self._baseline_y is not None:
-            by_screen = oy + self._baseline_y * scale
-            pen = QPen(QColor(0, 120, 215, 180), 1, Qt.DashLine)
-            painter.setPen(pen)
-            painter.drawLine(0, int(by_screen), self.width(), int(by_screen))
-
-        # Draw each part: filled outer + punched holes, then outline strokes.
         for part in self._vg.parts:
             if not part.outer:
                 continue
-            # Build the outer polygon by sampling bezier segments.
             outer_poly = _segments_to_polygon(part.outer, to_screen)
             if outer_poly.size() < 2:
                 continue
             painter.setBrush(QColor(60, 60, 60))
             painter.setPen(QPen(QColor(20, 20, 20), 1))
             painter.drawPolygon(outer_poly)
-            # Punch holes by drawing them with the background color.
             for hole in part.holes:
                 hpoly = _segments_to_polygon(hole, to_screen)
                 if hpoly.size() < 2:
                     continue
-                painter.setBrush(self.palette().window().color())
+                painter.setBrush(em_rect_color)
                 painter.setPen(Qt.NoPen)
                 painter.drawPolygon(hpoly)
 
@@ -103,30 +138,6 @@ class VectorPreviewWidget(QWidget):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _compute_bbox(vg: VectorizedGlyph):
-    xs = []
-    ys = []
-    for part in vg.parts:
-        for seg in part.outer:
-            xs.extend([seg.start[0], seg.end[0], seg.c1[0]])
-            ys.extend([seg.start[1], seg.end[1], seg.c1[1]])
-            if seg.c2 is not None:
-                xs.append(seg.c2[0])
-                ys.append(seg.c2[1])
-        for hole in part.holes:
-            for seg in hole:
-                xs.extend([seg.start[0], seg.end[0], seg.c1[0]])
-                ys.extend([seg.start[1], seg.end[1], seg.c1[1]])
-                if seg.c2 is not None:
-                    xs.append(seg.c2[0])
-                    ys.append(seg.c2[1])
-    if not xs:
-        return (0.0, 0.0, 1.0, 1.0)
-    x0, x1 = min(xs), max(xs)
-    y0, y1 = min(ys), max(ys)
-    return (x0, y0, max(1.0, x1 - x0), max(1.0, y1 - y0))
 
 
 def _segments_to_polygon(segments, to_screen) -> QPolygonF:
@@ -138,7 +149,7 @@ def _segments_to_polygon(segments, to_screen) -> QPolygonF:
     poly = QPolygonF()
     if not segments:
         return poly
-    steps = 8
+    steps = 10
     poly.append(to_screen(segments[0].start[0], segments[0].start[1]))
     for seg in segments:
         if seg.is_corner:

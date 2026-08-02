@@ -340,3 +340,44 @@ def advance_width_em(inst: GlyphInstance, proj: Project, side_bearing_em: int = 
     scale = _compute_scale(inst, proj)
     w_em = int(round(inst.bbox[2] * scale))
     return max(1, w_em + side_bearing_em)
+
+
+# ---------------------------------------------------------------------------
+# UPEM-normalized vectorization (for preview + consistent font units)
+# ---------------------------------------------------------------------------
+
+
+def normalize_to_upem(inst: GlyphInstance, proj: Project) -> VectorizedGlyph:
+    """Return a VectorizedGlyph with all coordinates in font units (UPEM).
+
+    Transform applied to every point:
+    - x: (px - bbox.x) * scale + left_bearing
+    - y: (baseline_y - py) * scale   (flip y; baseline → 0)
+
+    where ``scale`` maps the word-height band to ~700 em units (see
+    ``_compute_scale``) and ``left_bearing`` is a small margin. The result is
+    a glyph positioned exactly as it will appear in the font, suitable for
+    previewing inside an em box.
+    """
+    vg = vectorize_instance(inst)
+    scale = _compute_scale(inst, proj)
+    lb = int(round(0.05 * proj.units_per_em))
+
+    def tx(px: float, py: float) -> Tuple[float, float]:
+        return _px_to_font(px, py, inst, scale, lb)
+
+    norm_parts: List[VectorPart] = []
+    for part in vg.parts:
+        nstart = tx(part.start_point[0], part.start_point[1])
+        nouter = [_norm_seg(s, tx) for s in part.outer]
+        nholes = [[_norm_seg(s, tx) for s in hole] for hole in part.holes]
+        norm_parts.append(VectorPart(outer=nouter, holes=nholes, start_point=nstart))
+    return VectorizedGlyph(parts=norm_parts)
+
+
+def _norm_seg(seg: BezierSegment, tx) -> BezierSegment:
+    s = tx(seg.start[0], seg.start[1])
+    c1 = tx(seg.c1[0], seg.c1[1])
+    e = tx(seg.end[0], seg.end[1])
+    c2 = tx(seg.c2[0], seg.c2[1]) if seg.c2 is not None else None
+    return BezierSegment(start=s, c1=c1, end=e, c2=c2)
