@@ -22,6 +22,7 @@ class WordListWidget(QWidget):
 
     word_selected = pyqtSignal(object)  # emits a Word or None
     words_changed = pyqtSignal()        # emitted after edit or delete
+    word_marked = pyqtSignal(object)    # emitted after a word's mark state toggles
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -109,6 +110,7 @@ class WordListWidget(QWidget):
         word.marked = not word.marked
         item = self.list_widget.item(row)
         self._apply_edit_color(item, word)
+        self.word_marked.emit(word)
 
     def delete_selected(self) -> None:
         row = self.list_widget.currentRow()
