@@ -84,11 +84,14 @@ class GlyphBrowserWidget(QWidget):
         self.btn_delete.clicked.connect(self._delete_instance)
         self.btn_revector = QPushButton("Re-vectorize")
         self.btn_revector.clicked.connect(self._revectorize)
+        self.btn_put_baseline = QPushButton("Put on baseline")
+        self.btn_put_baseline.clicked.connect(self._put_on_baseline)
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btn_set_best)
         btn_row.addWidget(self.btn_delete)
         btn_row.addWidget(self.btn_revector)
+        btn_row.addWidget(self.btn_put_baseline)
         btn_row.addStretch()
 
         right = QVBoxLayout()
@@ -258,17 +261,43 @@ class GlyphBrowserWidget(QWidget):
             return
         _cp, _idx, inst = cur
         try:
+            # Restore the original baseline (undo any "Put on baseline"
+            # override) and re-trace the contours.
+            inst.baseline_y = inst.original_baseline_y
             vectorize_instance(inst, force=True)
         except Exception as exc:  # noqa: BLE001
             self.metrics_view.setPlainText(f"Re-vectorization failed:\n{exc}")
             return
         self._show_instance(inst)
+        self.project_changed.emit()
+
+    def _put_on_baseline(self) -> None:
+        """Force the glyph's baseline to its bbox bottom.
+
+        This places the glyph exactly on the baseline. Useful for glyphs
+        whose stored baseline is wrong, but **incorrect for descender
+        glyphs** (p, у, д, ц, щ, …) whose bottom extends below the baseline.
+        For those, re-OCR the source image to get a proper line-aware
+        baseline.
+
+        The original baseline is preserved in ``original_baseline_y`` so
+        "Re-vectorize" can restore it.
+        """
+        cur = self._current_instance()
+        if cur is None:
+            return
+        _cp, _idx, inst = cur
+        inst.put_on_baseline()
+        inst.vector_cache = None  # force re-vectorize with new baseline
+        self._show_instance(inst)
+        self.project_changed.emit()
 
     def _refresh_enabled(self) -> None:
         has = self._current_instance() is not None
         self.btn_set_best.setEnabled(has)
         self.btn_delete.setEnabled(has)
         self.btn_revector.setEnabled(has)
+        self.btn_put_baseline.setEnabled(has)
 
 
 # ---------------------------------------------------------------------------

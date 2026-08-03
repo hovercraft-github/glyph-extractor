@@ -92,7 +92,10 @@ class WordListWidget(QWidget):
         # the "original" text to the new value so unmarking clears green.
         word.original_text = new_text
         word.marked = True
+        # Suppress itemChanged: setForeground triggers it, causing re-entrancy.
+        self._suppress_changed = True
         self._apply_edit_color(item, word)
+        self._suppress_changed = False
         self.words_changed.emit()
         self.word_marked.emit(word)
 
@@ -117,7 +120,11 @@ class WordListWidget(QWidget):
         word = self._words[row]
         word.marked = not word.marked
         item = self.list_widget.item(row)
+        # Suppress itemChanged: setForeground triggers it, which would re-enter
+        # _on_item_changed and re-mark the word green, making unmarking impossible.
+        self._suppress_changed = True
         self._apply_edit_color(item, word)
+        self._suppress_changed = False
         self.word_marked.emit(word)
 
     def delete_selected(self) -> None:

@@ -19,6 +19,12 @@ def extract_parts_for_symbol(
     objects — one per top-level (external) contour, each carrying its own
     hole contours (children).  All coordinates are in absolute image space.
 
+    The crop includes ``pad`` pixels of margin so contours near the bbox
+    edge are captured, but the padded border is masked out before contour
+    detection so ink from neighbouring symbols bleeding into the margin is
+    excluded — only ink within the symbol's own bbox ``[x, y, x+w, y+h]`` is
+    traced.
+
     Returns an empty list if no contour found.
     """
     img_h, img_w = gray.shape[:2]
@@ -35,6 +41,19 @@ def extract_parts_for_symbol(
     # Threshold: text is dark on light background (invert so text is white).
     # Use Otsu on the inverted image.
     _, thresh = cv2.threshold(crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Mask out the padded border so only ink within the symbol's actual bbox
+    # is traced. This prevents neighbouring glyphs (which may bleed into the
+    # padding margin) from being captured as spurious contour parts that
+    # extend beyond the symbol's bbox and map outside the em box.
+    # The bbox region within the crop is [bx-x0, by-y0, w, h].
+    bx0 = x - x0
+    by0 = y - y0
+    bx1 = bx0 + w
+    by1 = by0 + h
+    mask = np.zeros_like(thresh)
+    mask[by0:by1, bx0:bx1] = 255
+    thresh = cv2.bitwise_and(thresh, mask)
 
     contours, hierarchy = cv2.findContours(
         thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE

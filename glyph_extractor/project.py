@@ -59,6 +59,9 @@ class GlyphInstance:
     bbox: BBox = (0, 0, 0, 0)           # symbol bbox (x, y, w, h), word-local
     word_bbox: BBox = (0, 0, 0, 0)      # (0, 0, word.w, word.h)
     baseline_y: int = 0                 # baseline offset from word top, word-local
+    # Original baseline from commit time; used by "Re-vectorize" to restore
+    # the baseline after "Put on baseline" overrides it.
+    original_baseline_y: int = 0
     # Contour data (word-local px).
     parts: List[GlyphPart] = field(default_factory=list)
     # Quality signal used for auto-selection.
@@ -97,6 +100,22 @@ class GlyphInstance:
     @property
     def hole_count(self) -> int:
         return sum(len(p.holes) for p in self.parts)
+
+    def put_on_baseline(self) -> int:
+        """Force the baseline to the glyph's bbox bottom.
+
+        This places the glyph exactly on the baseline (its bottom edge sits
+        on y=0 in font units). Useful for glyphs whose stored ``baseline_y``
+        is wrong and the user wants a quick fix, but note that it is
+        **incorrect for descender glyphs** (p, у, д, ц, щ, …) whose bottom
+        extends below the baseline — for those, the word-level baseline
+        (computed from line context) should be used instead.
+
+        See ``compute_line_baselines`` in ``models.py`` for the proper
+        line-aware baseline estimation.
+        """
+        self.baseline_y = self.bbox[1] + self.bbox[3]
+        return self.baseline_y
 
     def quality_score(self) -> float:
         """Higher is better. Used by auto_select_best.
@@ -174,6 +193,7 @@ class Project:
             if not sym.char:
                 continue
             sx, sy, sw, sh = sym.box
+            bl_local = word.baseline_y - wy
             inst = GlyphInstance(
                 codepoint=format(ord(sym.char), "x"),
                 char=sym.char,
@@ -182,7 +202,8 @@ class Project:
                 sym_index=sym.index,
                 bbox=(sx - wx, sy - wy, sw, sh),
                 word_bbox=(0, 0, ww, wh),
-                baseline_y=word.baseline_y - wy,
+                baseline_y=bl_local,
+                original_baseline_y=bl_local,
                 parts=[_copy_part_local(p, wx, wy) for p in sym.parts],
                 ocr_conf=sym.conf,
             )
@@ -280,6 +301,7 @@ def _instance_to_dict(inst: GlyphInstance) -> dict:
 
 
 def _instance_from_dict(d: dict) -> GlyphInstance:
+    bl = d.get("baseline_y", 0)
     return GlyphInstance(
         codepoint=d["codepoint"],
         char=d.get("char", ""),
@@ -288,7 +310,8 @@ def _instance_from_dict(d: dict) -> GlyphInstance:
         sym_index=d.get("sym_index", -1),
         bbox=tuple(d.get("bbox", (0, 0, 0, 0))),
         word_bbox=tuple(d.get("word_bbox", (0, 0, 0, 0))),
-        baseline_y=d.get("baseline_y", 0),
+        baseline_y=bl,
+        original_baseline_y=d.get("original_baseline_y", bl),
         parts=[_part_from_dict(p) for p in d.get("parts", [])],
         ocr_conf=d.get("ocr_conf", 0.0),
         preview_png_b64=d.get("preview_png_b64", ""),
@@ -433,6 +456,7 @@ def _migrate_instance_to_local(inst: GlyphInstance) -> None:
     if bl < 0:
         bl = oh
     inst.baseline_y = bl
+    inst.original_baseline_y = bl
     for part in inst.parts:
         part.outer = [(px - ox, py - oy) for px, py in part.outer]
         part.holes = [

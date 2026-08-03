@@ -89,12 +89,16 @@ class Word:
         """Update the word text and propagate chars to symbols.
 
         Returns True if accepted (same length), False otherwise.
+
+        Resets ``committed`` so the word is re-committed to the project DB on
+        the next mark — the old glyphs (under the previous chars) are stale.
         """
         if len(new_text) != len(self.text):
             return False
         self.text = new_text
         for sym, ch in zip(self.symbols, new_text):
             sym.char = ch
+        self.committed = False
         return True
 
     def compute_baseline(self) -> int:
@@ -147,37 +151,39 @@ def _word_has_anchor(word: Word) -> bool:
 
 
 def compute_line_baselines(words: List[Word]) -> None:
-    """Assign each word a baseline estimated from its text line.
+    """Assign each word a baseline.
 
-    Words on the same horizontal line share a baseline. For each line we
-    collect the bbox bottoms of **baseline-anchoring** symbols (letters and
-    digits, excluding floating punctuation) across all words on that line,
-    and take the 25th percentile as the line baseline. Every word on the
-    line — including punctuation-only words like ``"`` — then inherits that
-    line baseline, so floating glyphs are positioned correctly above it.
+    **Anchoring words** (containing letters/digits) get a per-word baseline
+    computed from their own symbols' bbox bottoms (25th percentile). This
+    guarantees the baseline is consistent with the word's own bbox — the
+    key invariant for correct glyph positioning in word-local coordinates.
 
-    Grouping is two-pass:
+    **Floating words** (punctuation-only, e.g. ``"``) inherit the baseline
+    from the nearest anchoring line **below** them — floating punctuation
+    sits above the text it quotes. If no suitable line is found, they fall
+    back to their own per-word estimate.
 
-    1. Words that contain at least one anchoring symbol are grouped into
-       lines by vertical overlap of their bboxes (generous tolerance, since
-       cap-height vs x-height variation on one line is normal).
-    2. Words with **no** anchoring symbols (e.g. a lone ``"``) are attached
-       to the nearest anchoring line **below** them — floating punctuation
-       sits above the text it quotes — provided the gap is within a line's
-       worth of height. Otherwise they fall back to per-word estimation.
-
-    A word with no anchoring symbols on its line falls back to its own
-    ``compute_baseline``.
+    This approach ensures that for every word, the stored ``baseline_y`` is
+    consistent with the word's bbox: the baseline falls within the word's
+    vertical extent (for anchoring words) or below it (for floating words),
+    so the word-local translation at commit time always produces a valid
+    in-range baseline.
     """
-    import numpy as np
-
     if not words:
         return
 
     anchoring_words = [w for w in words if _word_has_anchor(w)]
     floating_words = [w for w in words if not _word_has_anchor(w)]
 
-    # --- Pass 1: group anchoring words into lines by vertical overlap ---
+    # --- Pass 1: compute per-word baselines for anchoring words ---
+    # Each anchoring word gets its own baseline from its own symbols.
+    # This guarantees baseline-bbox consistency within each word.
+    for w in anchoring_words:
+        w.compute_baseline()
+
+    # --- Pass 2: group anchoring words into lines (for floating words) ---
+    # We need line grouping only to provide a baseline reference for
+    # floating words. Group by vertical overlap with tight tolerance.
     anchoring_words.sort(key=lambda w: w.box[1])
     lines: List[List[Word]] = []
     for w in anchoring_words:
@@ -188,10 +194,6 @@ def compute_line_baselines(words: List[Word]) -> None:
             ref = line[0]
             ry, rh = ref.box[1], ref.box[3]
             r_top, r_bot = ry, ry + rh
-            # Same line only if the bboxes vertically overlap, or are
-            # separated by a small gap (<= 20% of the taller word's height).
-            # A full word-height of tolerance would merge adjacent text lines
-            # in dense documents, so keep this tight.
             gap = max(0, max(r_top, w_top) - min(r_bot, w_bot))
             tol = 0.2 * max(wh, rh)
             if gap <= tol:
@@ -201,45 +203,28 @@ def compute_line_baselines(words: List[Word]) -> None:
         if not placed:
             lines.append([w])
 
-    # Compute a baseline per anchoring line.
+    # Compute a representative baseline per line (for floating words).
+    # Use the median of the per-word baselines on the line.
+    import numpy as np
     line_baselines: List[tuple] = []  # (top, bottom, baseline)
     for line in lines:
-        anchors = [
-            sym.box[1] + sym.box[3]
-            for w in line
-            for sym in w.symbols
-            if _is_baseline_anchoring(sym)
-        ]
-        bl = int(np.percentile(anchors, 25))
+        bls = [w.baseline_y for w in line]
+        bl = int(np.median(bls))
         tops = min(w.box[1] for w in line)
         bots = max(w.box[1] + w.box[3] for w in line)
         line_baselines.append((tops, bots, bl))
 
-    # --- Pass 2: attach floating-only words to the nearest line below ---
+    # --- Pass 3: attach floating-only words to the nearest line below ---
     # Floating punctuation sits ABOVE the baseline, so its inherited line
     # baseline is expected to be BELOW its bbox — no clamping here.
     for w in floating_words:
         wy, wh = w.box[1], w.box[3]
         w_bot = wy + wh
-        # Candidate lines whose top is at or below the floating word's
-        # bottom (i.e. the line of text beneath the punctuation).
         candidates = [lb for lb in line_baselines if lb[0] >= w_bot - 1]
         if candidates:
-            # Nearest line below by top edge.
             top, bot, bl = min(candidates, key=lambda lb: lb[0] - w_bot)
-            # Only attach if the gap is within a reasonable bound: the line's
-            # own height (avoids attaching to an unrelated line far below).
             if (top - w_bot) <= (bot - top) * 1.5 + 4:
                 w.baseline_y = bl
                 continue
         # No suitable line: fall back to per-word estimation.
         w.compute_baseline()
-
-    # --- Assign baselines to anchoring-line words ---
-    # The line baseline is computed from anchoring symbols on the line, so it
-    # is within the line's vertical extent by construction. The word-local
-    # translation at commit time (add_word_glyphs) guarantees the stored
-    # baseline_y is within [0, word.h], so no clamping is needed here.
-    for line, (_, _, bl) in zip(lines, line_baselines):
-        for w in line:
-            w.baseline_y = bl
