@@ -267,10 +267,13 @@ def _px_to_font(
 def to_tt_glyph(inst: GlyphInstance, proj: Project, glyph_name: str):
     """Build a fontTools TTGlyph for the instance's vectorized outline.
 
-    Uses ``vectorize_instance`` (cached) and a ``TTGlyphPen``. Corner segments
-    are emitted as quadratic curves through the corner point (a reasonable
-    approximation; TrueType glyf supports quadratics only).
+    Uses ``vectorize_instance`` (cached) and a ``TTGlyphPen`` wrapped in a
+    ``Cu2QuPen`` so the cubic bezier curves produced by potrace are converted
+    to the quadratic curves required by the TrueType ``glyf`` table. Corner
+    segments are emitted directly as quadratic curves through the corner
+    point.
     """
+    from fontTools.pens.cu2quPen import Cu2QuPen
     from fontTools.pens.ttGlyphPen import TTGlyphPen
 
     vg = vectorize_instance(inst)
@@ -278,11 +281,16 @@ def to_tt_glyph(inst: GlyphInstance, proj: Project, glyph_name: str):
     # Left bearing: a small margin so the leftmost ink isn't flush against 0.
     left_bearing_em = int(round(0.05 * proj.units_per_em))
 
-    pen = TTGlyphPen(None)
+    # Max error for cubic→quadratic conversion, in font units. 1 em unit is
+    # visually imperceptible at typical rendering sizes.
+    max_err = max(1, proj.units_per_em / 1000.0)
+
+    tt_pen = TTGlyphPen(None)
+    pen = Cu2QuPen(tt_pen, max_err=max_err)
     if not vg.parts:
         pen.moveTo((0, 0))
         pen.endPath()
-        return pen.glyph()
+        return tt_pen.glyph()
 
     for part in vg.parts:
         if not part.outer:
@@ -307,7 +315,7 @@ def to_tt_glyph(inst: GlyphInstance, proj: Project, glyph_name: str):
             for seg in hole:
                 _emit_segment(pen, seg, inst, scale, left_bearing_em)
             pen.closePath()
-    return pen.glyph()
+    return tt_pen.glyph()
 
 
 def _emit_segment(pen, seg: BezierSegment, inst: GlyphInstance, scale: float, lb: int) -> None:
