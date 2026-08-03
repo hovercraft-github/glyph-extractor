@@ -118,9 +118,20 @@ def build_font(proj: Project, out_path: str, family_name: Optional[str] = None) 
     """Build a TrueType font from the project's selected glyph instances.
 
     Writes the resulting ``.ttf`` to ``out_path`` and returns it.
+
+    All vectorize caches are invalidated at the start so the font reflects
+    any ongoing changes (set-best, delete, re-edit) without requiring a
+    save+reopen cycle. The cache is normally cleared on load, but within a
+    session it persists and can go stale if the instance's geometry or
+    selection changed since it was last viewed.
     """
     if family_name is None:
         family_name = proj.name or "Handwriting"
+
+    # Invalidate all vectorize caches so the font reflects current state.
+    for instances in proj.glyphs.values():
+        for inst in instances:
+            inst.vector_cache = None
 
     upem = proj.units_per_em
     fb = FontBuilder(upem, isTTF=True)
