@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 from .contours import fill_contours_for_symbols
 from .export import export_csv
 from .font_builder import build_font
+from .models import compute_line_baselines
 from .ocr import extract_words
 from .project import Project, create_project, load_project, save_project
 from .widgets.contour_view import ContourViewWidget
@@ -295,6 +296,11 @@ class MainWindow(QMainWindow):
         for word in words:
             fill_contours_for_symbols(self._gray, word.symbols)
 
+        # Estimate baselines per text line so floating punctuation (e.g. ``"``)
+        # inherits the baseline from neighbouring letters on the same line
+        # instead of collapsing onto its own glyph bottom.
+        compute_line_baselines(words)
+
         self.word_list.set_words(words)
         self.setWindowTitle(f"Glyph Extractor - {os.path.basename(path)}")
 
@@ -363,7 +369,12 @@ class MainWindow(QMainWindow):
             return
         if self._image is None:
             return
-        word.compute_baseline()
+        # Baselines are estimated per text line right after OCR
+        # (compute_line_baselines), so a floating glyph like ``"`` inherits
+        # the line baseline. Only fall back to a per-word estimate if no
+        # baseline was set (e.g. words added outside the OCR path).
+        if not word.baseline_y:
+            word.compute_baseline()
         source = os.path.basename(self._image_path) if self._image_path else "image"
         try:
             added = self._project.add_word_glyphs(word, source_image=source, preview_image=self._image)

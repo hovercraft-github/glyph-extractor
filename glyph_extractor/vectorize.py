@@ -253,7 +253,11 @@ def _px_to_font(
     scale: float,
     left_bearing_em: int,
 ) -> Tuple[float, float]:
-    """Transform an image-pixel point to font units.
+    """Transform a word-local pixel point to font units.
+
+    Geometry is stored word-local (origin = word bbox top-left), so no
+    baseline clamping is needed: ``inst.baseline_y`` is within ``[0, word.h]``
+    by construction (see ``add_word_glyphs``).
 
     - x: (px - bbox.x) * scale + left_bearing_em
     - y: (baseline_y - py) * scale   (flip y; baseline → 0)
@@ -272,6 +276,9 @@ def to_tt_glyph(inst: GlyphInstance, proj: Project, glyph_name: str):
     to the quadratic curves required by the TrueType ``glyf`` table. Corner
     segments are emitted directly as quadratic curves through the corner
     point.
+
+    Geometry is word-local (see ``GlyphInstance``), so ``inst.baseline_y`` is
+    within ``[0, word.h]`` by construction — no baseline clamping is needed.
     """
     from fontTools.pens.cu2quPen import Cu2QuPen
     from fontTools.pens.ttGlyphPen import TTGlyphPen
@@ -318,7 +325,9 @@ def to_tt_glyph(inst: GlyphInstance, proj: Project, glyph_name: str):
     return tt_pen.glyph()
 
 
-def _emit_segment(pen, seg: BezierSegment, inst: GlyphInstance, scale: float, lb: int) -> None:
+def _emit_segment(
+    pen, seg: BezierSegment, inst: GlyphInstance, scale: float, lb: int
+) -> None:
     """Emit one bezier/corner segment to a fontTools pen (in font units)."""
     if seg.is_corner:
         # Corner: line to the corner point, then line to end. We approximate
@@ -366,6 +375,10 @@ def normalize_to_upem(inst: GlyphInstance, proj: Project) -> VectorizedGlyph:
     ``_compute_scale``) and ``left_bearing`` is a small margin. The result is
     a glyph positioned exactly as it will appear in the font, suitable for
     previewing inside an em box.
+
+    Geometry is word-local (see ``GlyphInstance``), so ``inst.baseline_y`` is
+    within ``[0, word.h]`` by construction — no baseline clamping is needed,
+    and the preview matches the built font exactly.
     """
     vg = vectorize_instance(inst)
     scale = _compute_scale(inst, proj)

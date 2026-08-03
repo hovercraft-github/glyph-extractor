@@ -32,8 +32,20 @@ from .models import BBox, GlyphPart, Symbol, Word
 class GlyphInstance:
     """One observed occurrence of a glyph for a given codepoint.
 
-    All geometry is stored in **image pixel coordinates** (top-down y). The
-    vectorization / font-building layer is responsible for converting to font
+    All geometry is stored in **word-local pixel coordinates** (top-down y),
+    with the origin at the word bbox's top-left corner. That is, every
+    coordinate has had the source word's ``(x, y)`` offset subtracted from it
+    at commit time (see ``add_word_glyphs``). Consequences:
+
+    - ``bbox`` is relative to the word origin: ``(sym.x - word.x, sym.y -
+      word.y, w, h)``.
+    - ``word_bbox`` is ``(0, 0, word.w, word.h)``.
+    - ``baseline_y`` is the baseline offset from the word's top edge
+      (``word.baseline_y - word.y``), so it is always within ``[0, word.h]``
+      by construction — no clamping is needed downstream.
+    - ``parts`` contour points are likewise word-local.
+
+    The vectorization / font-building layer converts these local px to font
     units (flipping y, scaling px → em, positioning relative to baseline).
     """
 
@@ -43,11 +55,11 @@ class GlyphInstance:
     source_image: str = ""              # basename of the source PNG
     word_index: int = -1
     sym_index: int = -1
-    # Geometry (image px, top-down y).
-    bbox: BBox = (0, 0, 0, 0)           # symbol bbox (x, y, w, h)
-    word_bbox: BBox = (0, 0, 0, 0)
-    baseline_y: int = 0                 # word baseline in image top-down y
-    # Contour data.
+    # Geometry (word-local px, top-down y; origin = word bbox top-left).
+    bbox: BBox = (0, 0, 0, 0)           # symbol bbox (x, y, w, h), word-local
+    word_bbox: BBox = (0, 0, 0, 0)      # (0, 0, word.w, word.h)
+    baseline_y: int = 0                 # baseline offset from word top, word-local
+    # Contour data (word-local px).
     parts: List[GlyphPart] = field(default_factory=list)
     # Quality signal used for auto-selection.
     ocr_conf: float = 0.0
@@ -153,19 +165,25 @@ class Project:
         Returns the number of instances added.
         """
         added = 0
+        # Translate all geometry to word-local coordinates (origin = word bbox
+        # top-left) at this commit boundary. After this point every stored
+        # number is self-contained: baseline_y is within [0, word.h] by
+        # construction, so no downstream clamping is needed.
+        wx, wy, ww, wh = word.box
         for sym in word.symbols:
             if not sym.char:
                 continue
+            sx, sy, sw, sh = sym.box
             inst = GlyphInstance(
                 codepoint=format(ord(sym.char), "x"),
                 char=sym.char,
                 source_image=source_image,
                 word_index=word.index,
                 sym_index=sym.index,
-                bbox=sym.box,
-                word_bbox=word.box,
-                baseline_y=word.baseline_y,
-                parts=[_copy_part(p) for p in sym.parts],
+                bbox=(sx - wx, sy - wy, sw, sh),
+                word_bbox=(0, 0, ww, wh),
+                baseline_y=word.baseline_y - wy,
+                parts=[_copy_part_local(p, wx, wy) for p in sym.parts],
                 ocr_conf=sym.conf,
             )
             if preview_image is not None:
@@ -294,11 +312,12 @@ def _project_to_dict(proj: Project) -> dict:
         },
         "selected": dict(proj.selected),
         "format": "glyph-extractor-project",
-        "version": 2,
+        "version": 3,
     }
 
 
 def _project_from_dict(d: dict) -> Project:
+    version = d.get("version", 1)
     proj = Project(
         name=d.get("name", "Untitled"),
         created_at=d.get("created_at", time.time()),
@@ -314,6 +333,12 @@ def _project_from_dict(d: dict) -> Project:
         },
         selected=dict(d.get("selected", {})),
     )
+    # Migrate older (page-absolute) instances to word-local coordinates.
+    # v1/v2 stored geometry in image pixel coordinates; v3 stores it word-local.
+    if version < 3:
+        for instances in proj.glyphs.values():
+            for inst in instances:
+                _migrate_instance_to_local(inst)
     # Ensure every codepoint has a valid selection.
     for cp in proj.glyphs:
         if cp not in proj.selected or proj.selected[cp] >= len(proj.glyphs[cp]):
@@ -367,6 +392,52 @@ def _copy_part(part: GlyphPart) -> GlyphPart:
         outer=list(part.outer),
         holes=[list(h) for h in part.holes],
     )
+
+
+def _copy_part_local(part: GlyphPart, dx: int, dy: int) -> GlyphPart:
+    """Copy a GlyphPart, translating every point by ``(-dx, -dy)``.
+
+    Used at the commit boundary (``add_word_glyphs``) to convert page-absolute
+    contour coordinates into word-local coordinates (origin = word bbox
+    top-left).
+    """
+    return GlyphPart(
+        outer=[(px - dx, py - dy) for px, py in part.outer],
+        holes=[[(px - dx, py - dy) for px, py in hole] for hole in part.holes],
+    )
+
+
+def _migrate_instance_to_local(inst: GlyphInstance) -> None:
+    """Migrate a v2 (page-absolute) instance to v3 (word-local) in place.
+
+    v2 stored ``word_bbox`` in page-absolute coordinates, so its ``(x, y)``
+    is the exact offset to subtract from every coordinate. After migration
+    ``word_bbox`` becomes ``(0, 0, w, h)``.
+
+    Stale baselines (from projects saved before line-level baseline
+    estimation) could land outside ``[0, word.h]``. A baseline above the word
+    top (``< 0``) is degenerate and would map the glyph below the em box, so
+    it is clamped to the word bottom (``word.h``). A baseline below the word
+    bottom (``> word.h``) is the legitimate floating case (quotes,
+    diacritics) and is kept as-is.
+    """
+    ox, oy, ow, oh = inst.word_bbox
+    if ox == 0 and oy == 0:
+        return  # already local (or no offset)
+    sx, sy, sw, sh = inst.bbox
+    inst.bbox = (sx - ox, sy - oy, sw, sh)
+    inst.word_bbox = (0, 0, ow, oh)
+    bl = inst.baseline_y - oy
+    # Clamp degenerate baseline (above word top) to word bottom; keep
+    # floating baseline (below word bottom) as-is.
+    if bl < 0:
+        bl = oh
+    inst.baseline_y = bl
+    for part in inst.parts:
+        part.outer = [(px - ox, py - oy) for px, py in part.outer]
+        part.holes = [
+            [(px - ox, py - oy) for px, py in hole] for hole in part.holes
+        ]
 
 
 def _crop_to_b64(image, box: BBox, pad: int = 1) -> str:
