@@ -36,6 +36,7 @@ from .ocr import extract_words
 from .project import Project, create_project, load_project, save_project
 from .widgets.contour_view import ContourViewWidget
 from .widgets.glyph_browser import GlyphBrowserWidget
+from .widgets.settings_dialog import SettingsDialog
 from .widgets.symbol_view import SymbolViewWidget
 from .widgets.word_list import WordListWidget
 
@@ -150,6 +151,13 @@ class MainWindow(QMainWindow):
         build_action.triggered.connect(self.build_font)
         proj_menu.addAction(build_action)
 
+        proj_menu.addSeparator()
+
+        settings_action = QAction("Settings...", self)
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.triggered.connect(self.edit_settings)
+        proj_menu.addAction(settings_action)
+
     # --- Project actions ---
 
     def new_project(self) -> None:
@@ -244,6 +252,20 @@ class MainWindow(QMainWindow):
             f"Glyphs: {len(self._project.glyphs)}",
         )
 
+    def edit_settings(self) -> None:
+        if self._project is None:
+            QMessageBox.information(self, "No project", "Open or create a project first.")
+            return
+        dlg = SettingsDialog(self._project, self)
+        if dlg.exec_() == SettingsDialog.Accepted:
+            # Persist immediately if the project has a path.
+            if self._project.path is not None:
+                try:
+                    save_project(self._project)
+                except Exception as exc:  # noqa: BLE001
+                    QMessageBox.warning(self, "Save error", f"Failed to save settings:\n{exc}")
+            self._update_status_bar()
+
     # --- File actions ---
 
     def open_image(self) -> None:
@@ -262,7 +284,9 @@ class MainWindow(QMainWindow):
         self.symbol_view.set_image(image)
 
         try:
-            words = extract_words(image)
+            lang = self._project.ocr_lang if self._project is not None else "rus+eng"
+            tcmd = self._project.tesseract_cmd if self._project is not None else ""
+            words = extract_words(image, lang=lang, tesseract_cmd=tcmd)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "OCR error", f"Tesseract failed:\n{exc}")
             return

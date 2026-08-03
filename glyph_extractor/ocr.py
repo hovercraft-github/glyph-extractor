@@ -1,7 +1,7 @@
 """OCR extraction using pytesseract."""
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -22,7 +22,9 @@ def _box_from_data(data: dict, i: int, img_h: int) -> BBox:
     return (x, y, w, h)
 
 
-def _parse_char_boxes(image: np.ndarray) -> List[Tuple[str, int, int, int, int, float]]:
+def _parse_char_boxes(
+    image: np.ndarray, lang: Optional[str] = None
+) -> List[Tuple[str, int, int, int, int, float]]:
     """Return list of (char, x, y, w, h, conf) from image_to_boxes.
 
     Tesseract box format: "char left bottom right top page"
@@ -30,7 +32,7 @@ def _parse_char_boxes(image: np.ndarray) -> List[Tuple[str, int, int, int, int, 
     We convert to image-top-down coordinates.
     """
     img_h = image.shape[0]
-    boxes = pytesseract.image_to_boxes(image)
+    boxes = pytesseract.image_to_boxes(image, lang=lang)
     results = []
     for line in boxes.splitlines():
         parts = line.split()
@@ -52,18 +54,29 @@ def _parse_char_boxes(image: np.ndarray) -> List[Tuple[str, int, int, int, int, 
     return results
 
 
-def extract_words(image: np.ndarray) -> List[Word]:
+def extract_words(
+    image: np.ndarray,
+    lang: str = "rus+eng",
+    tesseract_cmd: str = "",
+) -> List[Word]:
     """Run OCR and return a list of Word objects with grouped symbols.
 
     Uses image_to_data for word-level info (text, conf, bbox) and
     image_to_boxes for per-character boxes, then groups chars into words
     by spatial overlap with word bboxes.
+
+    ``lang`` is a ``+``-separated list of tesseract language codes. An empty
+    string falls back to tesseract's default. ``tesseract_cmd`` optionally
+    overrides the path to the tesseract executable.
     """
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
 
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
     # Word-level data
-    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
-    char_entries = _parse_char_boxes(gray)
+    data = pytesseract.image_to_data(gray, lang=lang or None, output_type=pytesseract.Output.DICT)
+    char_entries = _parse_char_boxes(gray, lang=lang or None)
 
     words: List[Word] = []
     word_idx = 0

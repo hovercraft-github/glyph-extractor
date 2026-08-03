@@ -116,6 +116,11 @@ class Project:
     units_per_em: int = 1000
     ascent: int = 800
     descent: int = -200
+    # OCR settings: pytesseract recognition language(s). A ``+``-separated list
+    # of tesseract language codes (e.g. "rus+eng"). Empty => tesseract default.
+    ocr_lang: str = "rus+eng"
+    # Path to the tesseract executable. Empty => pytesseract default.
+    tesseract_cmd: str = ""
     # codepoint hex -> list of instances.
     glyphs: Dict[str, List[GlyphInstance]] = field(default_factory=dict)
     # codepoint hex -> index into glyphs[codepoint] of the chosen instance.
@@ -281,13 +286,15 @@ def _project_to_dict(proj: Project) -> dict:
         "units_per_em": proj.units_per_em,
         "ascent": proj.ascent,
         "descent": proj.descent,
+        "ocr_lang": proj.ocr_lang,
+        "tesseract_cmd": proj.tesseract_cmd,
         "glyphs": {
             cp: [_instance_to_dict(i) for i in instances]
             for cp, instances in proj.glyphs.items()
         },
         "selected": dict(proj.selected),
         "format": "glyph-extractor-project",
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -299,6 +306,8 @@ def _project_from_dict(d: dict) -> Project:
         units_per_em=d.get("units_per_em", 1000),
         ascent=d.get("ascent", 800),
         descent=d.get("descent", -200),
+        ocr_lang=d.get("ocr_lang", "rus+eng"),
+        tesseract_cmd=d.get("tesseract_cmd", ""),
         glyphs={
             cp: [_instance_from_dict(i) for i in instances]
             for cp, instances in d.get("glyphs", {}).items()
