@@ -87,11 +87,22 @@ def compute_kerning_pairs(
     rows: List[dict],
     word_height_em: float = 700.0,
     min_samples: int = 2,
+    kind_ratios: Dict[str, float] | None = None,
 ) -> Dict[Tuple[str, str], float]:
     """Compute average kerning pairs from adjacent symbols in words.
 
     Returns {(glyphA, glyphB): kerning_value_in_em_units}.
+
+    The per-word scale is composition-normalized (cap-height reference):
+    ``scale = word_height_em * F / word_h`` where ``F`` is the per-word
+    scale factor derived from the letter kinds present (see
+    :func:`letter_kinds.word_scale_factor`). Pass ``kind_ratios`` to use
+    calibrated ratios; defaults are used otherwise. This keeps CSV-derived
+    kerning consistent with the project DB / font-builder scale.
     """
+    from .letter_kinds import DEFAULT_KIND_RATIOS, Kind, word_kinds_from_chars, word_scale_factor
+
+    ratios = kind_ratios or dict(DEFAULT_KIND_RATIOS)
     words = group_by_word(rows)
     pair_gaps: Dict[Tuple[str, str], List[float]] = defaultdict(list)
     pair_scales: Dict[Tuple[str, str], List[float]] = defaultdict(list)
@@ -99,10 +110,13 @@ def compute_kerning_pairs(
     for wid, syms in words.items():
         if len(syms) < 2:
             continue
-        # Compute the scale factor from word height to em.
+        # Composition-normalized scale: cap_height_em * F / word_h.
         word_bbox = parse_bbox(syms[0].get("word_bbox", syms[0]["bbox"]))
         word_h = word_bbox[3] if len(word_bbox) >= 4 else 1
-        scale = word_height_em / max(word_h, 1)
+        wk = word_kinds_from_chars(s.get("label", "") for s in syms)
+        kinds = tuple(Kind(k) for k in wk if k)
+        f = word_scale_factor(kinds, ratios)
+        scale = word_height_em * f / max(word_h, 1)
 
         for i in range(len(syms) - 1):
             a = syms[i]

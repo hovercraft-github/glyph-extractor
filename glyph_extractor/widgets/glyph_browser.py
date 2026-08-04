@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..letter_kinds import word_kinds_labels
 from ..project import GlyphInstance, Project
 from ..vectorize import advance_width_em, normalize_to_upem, vectorize_instance
 from .vector_preview import VectorPreviewWidget
@@ -335,11 +336,14 @@ def _pixmap_from_instance(inst: GlyphInstance) -> Optional[QIcon]:
 def _metrics_text(inst: GlyphInstance, proj: Project) -> str:
     x, y, w, h = inst.bbox
     adv_em = advance_width_em(inst, proj)
+    f = proj.word_scale_factor_for(inst.word_kinds)
     return (
         f"char: {inst.char}   codepoint: U+{inst.codepoint.upper()}\n"
         f"UPEM: {proj.units_per_em}   ascent: {proj.ascent}   descent: {proj.descent}\n"
         f"bbox: x={x} y={y} w={w} h={h} (px)\n"
         f"advance width: {inst.advance_width_px} px  →  {adv_em} em units\n"
+        f"word kinds: {word_kinds_labels(inst.word_kinds)}   "
+        f"scale factor F={f:.2f}\n"
         f"baseline y: {inst.baseline_y} px   "
         f"baseline offset: {inst.baseline_y - (y + h)} px (descender if <0)\n"
         f"OCR conf: {inst.ocr_conf:.1f}\n"

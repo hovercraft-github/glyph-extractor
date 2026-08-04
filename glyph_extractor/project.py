@@ -17,9 +17,19 @@ import base64
 import json
 import os
 import time
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from .letter_kinds import (
+    DEFAULT_KIND_RATIOS,
+    Kind,
+    _BOTTOM_KINDS,
+    _TOP_KINDS,
+    letter_kinds,
+    word_kinds_from_chars,
+    word_scale_factor,
+)
 from .models import BBox, GlyphPart, Symbol, Word
 
 
@@ -64,6 +74,11 @@ class GlyphInstance:
     original_baseline_y: int = 0
     # Contour data (word-local px).
     parts: List[GlyphPart] = field(default_factory=list)
+    # Letter kinds present in the source word (sorted tuple of Kind values).
+    # Used to compute the per-word scale factor F (see
+    # ``Project.word_scale_factor``) so that glyphs from words of different
+    # vertical composition are normalized to a common cap-height reference.
+    word_kinds: Tuple[str, ...] = field(default_factory=tuple)
     # Quality signal used for auto-selection.
     ocr_conf: float = 0.0
     # Raster preview stored inline as base64 PNG (small crops).
@@ -156,6 +171,14 @@ class Project:
     glyphs: Dict[str, List[GlyphInstance]] = field(default_factory=dict)
     # codepoint hex -> index into glyphs[codepoint] of the chosen instance.
     selected: Dict[str, int] = field(default_factory=dict)
+    # Per-kind vertical extent ratios (cap-relative, cap = 1.0). Used by
+    # ``word_scale_factor`` to normalize words of different letter
+    # composition to a common cap-height reference. Calibrated from
+    # committed instances (see ``calibrate_kind_ratios``); defaults match
+    # the table in ``letter_kinds.py`` so calibration is optional.
+    kind_ratios: Dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_KIND_RATIOS)
+    )
     # Filesystem location (set on load/save).
     path: Optional[str] = None
 
@@ -189,6 +212,10 @@ class Project:
         # number is self-contained: baseline_y is within [0, word.h] by
         # construction, so no downstream clamping is needed.
         wx, wy, ww, wh = word.box
+        # Letter kinds present in this word — used to compute the per-word
+        # scale factor F (see ``word_scale_factor``) so glyphs from words of
+        # different vertical composition normalize to a common cap height.
+        wk = word_kinds_from_chars(s.char for s in word.symbols if s.char)
         for sym in word.symbols:
             if not sym.char:
                 continue
@@ -205,12 +232,16 @@ class Project:
                 baseline_y=bl_local,
                 original_baseline_y=bl_local,
                 parts=[_copy_part_local(p, wx, wy) for p in sym.parts],
+                word_kinds=wk,
                 ocr_conf=sym.conf,
             )
             if preview_image is not None:
                 inst.preview_png_b64 = _crop_to_b64(preview_image, sym.box)
             self.add_instance(inst)
             added += 1
+        # Re-calibrate per-kind ratios from the updated instance set so the
+        # scale factor reflects the latest data.
+        self.calibrate_kind_ratios()
         return added
 
     def remove_instance(self, codepoint: str, index: int) -> None:
@@ -247,6 +278,78 @@ class Project:
             return
         best_idx = max(range(len(instances)), key=lambda i: instances[i].quality_score())
         self.selected[codepoint] = best_idx
+
+    # --- Word-composition scale factor ---
+
+    def word_scale_factor_for(self, word_kinds: Tuple[str, ...]) -> float:
+        """Compute the per-word scale factor ``F`` for a set of letter kinds.
+
+        ``F`` expresses the word's vertical extent as a multiple of the cap
+        height (cap = 1.0). It is derived from the project's calibrated
+        ``kind_ratios``. See :func:`letter_kinds.word_scale_factor`.
+        """
+        kinds = tuple(Kind(k) for k in word_kinds if k)
+        return word_scale_factor(kinds, self.kind_ratios)
+
+    def calibrate_kind_ratios(self) -> None:
+        """Re-estimate per-kind extent ratios from committed instances.
+
+        For each instance we measure, in word-local pixels:
+        - ``top_px    = baseline_y - bbox.y``          (height above baseline)
+        - ``bottom_px = (bbox.y + bbox.h) - baseline_y`` (depth below baseline)
+
+        Instances are bucketed by the letter kinds of their *own* character
+        (via :func:`letter_kinds.letter_kinds`), and the median per kind is
+        taken. Ratios are expressed cap-relative: if capitals exist, the
+        capital median top is the reference (1.0); otherwise the regular
+        median top is the reference and capital/ascender/special are scaled
+        by ``1/0.6`` (the default regular ratio). Descender ratios are
+        relative to the same cap reference.
+
+        Falls back to ``DEFAULT_KIND_RATIOS`` when a kind has no samples.
+        """
+        import numpy as np
+
+        tops: Dict[str, List[float]] = defaultdict(list)
+        bots: Dict[str, List[float]] = defaultdict(list)
+        for instances in self.glyphs.values():
+            for inst in instances:
+                bx, by, bw, bh = inst.bbox
+                top_px = inst.baseline_y - by
+                bot_px = (by + bh) - inst.baseline_y
+                for k in letter_kinds(inst.char):
+                    if k in _TOP_KINDS:
+                        if top_px > 0:
+                            tops[k.value].append(float(top_px))
+                    elif k in _BOTTOM_KINDS:
+                        if bot_px > 0:
+                            bots[k.value].append(float(bot_px))
+
+        def _median(values: List[float]) -> Optional[float]:
+            if not values:
+                return None
+            return float(np.median(values))
+
+        cap_ref = _median(tops.get(Kind.CAPITAL.value, []))
+        if cap_ref is None or cap_ref <= 0:
+            # No capitals: reference from regular, assume cap = regular/0.6.
+            reg_ref = _median(tops.get(Kind.REGULAR.value, []))
+            if reg_ref is None or reg_ref <= 0:
+                # Not enough data — keep current (or default) ratios.
+                return
+            cap_ref = reg_ref / DEFAULT_KIND_RATIOS[Kind.REGULAR.value]
+
+        ratios = dict(DEFAULT_KIND_RATIOS)
+        for k in (Kind.CAPITAL, Kind.ASCENDER, Kind.REGULAR, Kind.SPECIAL):
+            m = _median(tops.get(k.value, []))
+            if m is not None and m > 0:
+                ratios[k.value] = m / cap_ref
+        for k in (Kind.DESCENDER,):
+            m = _median(bots.get(k.value, []))
+            if m is not None and m > 0:
+                ratios[k.value] = m / cap_ref
+        self.kind_ratios = ratios
+        self.modified_at = time.time()
 
     # --- Read-only summaries ---
 
@@ -297,6 +400,8 @@ def _instance_to_dict(inst: GlyphInstance) -> dict:
     # they serialize as lists.
     d["bbox"] = list(inst.bbox)
     d["word_bbox"] = list(inst.word_bbox)
+    # word_kinds is a tuple of str -> serialize as a list.
+    d["word_kinds"] = list(inst.word_kinds)
     return d
 
 
@@ -313,6 +418,7 @@ def _instance_from_dict(d: dict) -> GlyphInstance:
         baseline_y=bl,
         original_baseline_y=d.get("original_baseline_y", bl),
         parts=[_part_from_dict(p) for p in d.get("parts", [])],
+        word_kinds=tuple(d.get("word_kinds", ())),
         ocr_conf=d.get("ocr_conf", 0.0),
         preview_png_b64=d.get("preview_png_b64", ""),
         vector_cache=None,
@@ -329,13 +435,14 @@ def _project_to_dict(proj: Project) -> dict:
         "descent": proj.descent,
         "ocr_lang": proj.ocr_lang,
         "tesseract_cmd": proj.tesseract_cmd,
+        "kind_ratios": dict(proj.kind_ratios),
         "glyphs": {
             cp: [_instance_to_dict(i) for i in instances]
             for cp, instances in proj.glyphs.items()
         },
         "selected": dict(proj.selected),
         "format": "glyph-extractor-project",
-        "version": 3,
+        "version": 4,
     }
 
 
@@ -350,6 +457,7 @@ def _project_from_dict(d: dict) -> Project:
         descent=d.get("descent", -200),
         ocr_lang=d.get("ocr_lang", "rus+eng"),
         tesseract_cmd=d.get("tesseract_cmd", ""),
+        kind_ratios=dict(d.get("kind_ratios") or DEFAULT_KIND_RATIOS),
         glyphs={
             cp: [_instance_from_dict(i) for i in instances]
             for cp, instances in d.get("glyphs", {}).items()
@@ -362,10 +470,20 @@ def _project_from_dict(d: dict) -> Project:
         for instances in proj.glyphs.values():
             for inst in instances:
                 _migrate_instance_to_local(inst)
+    # v3 → v4: reconstruct per-instance ``word_kinds`` from traceability.
+    # v3 instances have no ``word_kinds``; regroup by (source_image,
+    # word_index), rebuild the char list ordered by sym_index, and assign
+    # the word's letter kinds to every member.
+    if version < 4:
+        _migrate_word_kinds(proj)
     # Ensure every codepoint has a valid selection.
     for cp in proj.glyphs:
         if cp not in proj.selected or proj.selected[cp] >= len(proj.glyphs[cp]):
             proj._auto_select(cp)
+    # Calibrate ratios from the (possibly migrated) instance set so the
+    # scale factor reflects the loaded data. This also covers v3 projects
+    # that had no ``kind_ratios`` field.
+    proj.calibrate_kind_ratios()
     return proj
 
 
@@ -462,6 +580,32 @@ def _migrate_instance_to_local(inst: GlyphInstance) -> None:
         part.holes = [
             [(px - ox, py - oy) for px, py in hole] for hole in part.holes
         ]
+
+
+def _migrate_word_kinds(proj: Project) -> None:
+    """Reconstruct ``word_kinds`` for v3 instances (in place).
+
+    v3 instances have no ``word_kinds`` field. Regroup all instances by
+    ``(source_image, word_index)``, rebuild the per-word character list
+    ordered by ``sym_index``, compute the word's letter kinds via
+    :func:`letter_kinds.word_kinds_from_chars`, and assign the result to
+    every member of the group. Instances already carrying ``word_kinds``
+    (e.g. from a partial v4 save) are left untouched.
+    """
+    by_word: Dict[Tuple[str, int], List[GlyphInstance]] = defaultdict(list)
+    for instances in proj.glyphs.values():
+        for inst in instances:
+            if inst.word_kinds:
+                continue
+            if inst.word_index < 0:
+                continue
+            by_word[(inst.source_image, inst.word_index)].append(inst)
+    for members in by_word.values():
+        members.sort(key=lambda i: i.sym_index)
+        chars = [m.char for m in members if m.char]
+        wk = word_kinds_from_chars(chars)
+        for m in members:
+            m.word_kinds = wk
 
 
 def _crop_to_b64(image, box: BBox, pad: int = 1) -> str:

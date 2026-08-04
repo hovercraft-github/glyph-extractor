@@ -240,10 +240,34 @@ def _vectorized_from_cache(d: dict) -> VectorizedGlyph:
 # ---------------------------------------------------------------------------
 
 
-def _compute_scale(inst: GlyphInstance, proj: Project, word_height_em: float = 700.0) -> float:
-    """Pixels → em units. The word's cap/x-height band maps to ``word_height_em``."""
+def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:
+    """Pixels → em units, normalized to a common cap-height reference.
+
+    The per-word scale factor ``F`` (see ``Project.word_scale_factor_for``)
+    expresses the source word's vertical extent as a multiple of the cap
+    height (cap = 1.0). Dividing the word bbox height by ``F`` recovers the
+    composition-independent cap height in pixels, which is then mapped to
+    ``cap_height_em`` em units:
+
+        scale = cap_height_em * F / word_h
+
+    This makes a glyph's em size depend on its *letter kind* (cap, x-height,
+    descender, …) rather than on the accidental vertical composition of the
+    source word it was extracted from.
+    """
     word_h = inst.word_bbox[3] if inst.word_bbox[3] > 0 else inst.bbox[3]
-    return proj.units_per_em * (word_height_em / proj.units_per_em) / max(word_h, 1)
+    f = proj.word_scale_factor_for(inst.word_kinds)
+    return cap_height_em * f / max(word_h, 1)
+
+
+def word_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:
+    """Shared px→em scale for a glyph instance (see :func:`_compute_scale`).
+
+    Single source of truth used by vectorization, advance-width, preview,
+    font-builder kerning, and the CSV kerning utility so that every consumer
+    applies the identical composition-normalized scale.
+    """
+    return _compute_scale(inst, proj, cap_height_em)
 
 
 def _px_to_font(

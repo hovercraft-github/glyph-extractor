@@ -15,7 +15,7 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.ttLib import TTFont
 
 from .project import GlyphInstance, Project
-from .vectorize import advance_width_em, to_tt_glyph
+from .vectorize import advance_width_em, to_tt_glyph, word_scale
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,9 @@ def _instance_gap_em(a: GlyphInstance, b: GlyphInstance, proj: Project) -> Optio
     """Pixel gap between two adjacent instances, scaled to em units.
 
     Uses contour edges when available, falls back to bbox edges. Returns None
-    if the gap can't be computed (missing geometry).
+    if the gap can't be computed (missing geometry). The scale is the shared
+    composition-normalized :func:`vectorize.word_scale` (cap-height
+    reference), so kerning is consistent with the glyph outlines.
     """
     if not a.parts or not b.parts:
         # bbox fallback
@@ -61,9 +63,7 @@ def _instance_gap_em(a: GlyphInstance, b: GlyphInstance, proj: Project) -> Optio
         if not a_rights or not b_lefts:
             return None
         gap_px = min(b_lefts) - max(a_rights)
-    # Scale: word height → ~700 em units (matches vectorize._compute_scale).
-    word_h = a.word_bbox[3] if a.word_bbox[3] > 0 else a.bbox[3]
-    scale = 700.0 / max(word_h, 1)
+    scale = word_scale(a, proj)
     return gap_px * scale
 
 
