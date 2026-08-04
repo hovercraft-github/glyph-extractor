@@ -4,6 +4,9 @@ The glyph's bezier curves are given in **font units** (y-up, baseline at 0,
 scaled to the project's units-per-em). The widget draws:
 - the em box as a light background (from descent to ascent, width = advance),
 - a green baseline line at y = 0,
+- per-kind reference lines (one per ``Project.kind_ratios`` entry) showing
+  the calibrated vertical extent of each letter kind in em units, each in a
+  distinct color with its em value labeled on the left,
 - the glyph outline filled in dark gray with holes punched out.
 
 Used inside the glyph browser to preview exactly how the glyph will appear in
@@ -11,18 +14,36 @@ the assembled font.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from PyQt5.QtCore import Qt, QPointF
 from PyQt5.QtGui import (
     QColor,
+    QFont,
     QPainter,
     QPen,
     QPolygonF,
 )
 from PyQt5.QtWidgets import QWidget
 
+from ..letter_kinds import DEFAULT_KIND_RATIOS, Kind
 from ..vectorize import VectorizedGlyph
+
+# Distinct color per kind for the reference lines. Order matches the
+# DEFAULT_KIND_RATIOS iteration order (capital, ascender, regular,
+# special, descender).
+_KIND_COLORS: Dict[str, QColor] = {
+    Kind.CAPITAL.value: QColor(0, 90, 170),    # blue
+    Kind.ASCENDER.value: QColor(170, 80, 0),   # orange-brown
+    Kind.REGULAR.value: QColor(130, 0, 170),   # purple
+    Kind.SPECIAL.value: QColor(0, 130, 130),   # teal
+    Kind.DESCENDER.value: QColor(170, 0, 0),   # red
+}
+
+# Kinds whose ratio is a *top* extent (above the baseline) vs a *bottom*
+# extent (below the baseline). Mirrors letter_kinds._TOP_KINDS/_BOTTOM_KINDS.
+_TOP_KINDS = {Kind.CAPITAL, Kind.ASCENDER, Kind.REGULAR, Kind.SPECIAL}
+_BOTTOM_KINDS = {Kind.DESCENDER}
 
 
 class VectorPreviewWidget(QWidget):
@@ -38,6 +59,11 @@ class VectorPreviewWidget(QWidget):
         self._ascent: int = 800
         self._descent: int = -200
         self._advance: int = 600  # glyph advance width in font units
+        # Per-kind extent ratios (cap-relative) + the cap-height reference
+        # in em units. Used to draw the reference lines. When empty, no
+        # reference lines are drawn.
+        self._kind_ratios: Dict[str, float] = dict(DEFAULT_KIND_RATIOS)
+        self._cap_height_em: float = 700.0
 
     def set_glyph(
         self,
@@ -46,16 +72,26 @@ class VectorPreviewWidget(QWidget):
         ascent: int = 800,
         descent: int = -200,
         advance: int = 600,
+        kind_ratios: Optional[Dict[str, float]] = None,
+        cap_height_em: float = 700.0,
     ) -> None:
         """Set the normalized glyph + em-box metrics and repaint.
 
         All geometry is in font units (y-up, baseline at 0).
+
+        ``kind_ratios`` (cap-relative extents, see ``Project.kind_ratios``)
+        and ``cap_height_em`` control the per-kind reference lines: each
+        ratio maps to an em height of ``ratio * cap_height_em`` above the
+        baseline (top kinds) or below it (descender), drawn in a distinct
+        color with its em value labeled on the left.
         """
         self._vg = vg
         self._upem = max(1, upem)
         self._ascent = ascent
         self._descent = descent
         self._advance = max(1, advance)
+        self._kind_ratios = dict(kind_ratios) if kind_ratios else dict(DEFAULT_KIND_RATIOS)
+        self._cap_height_em = max(1.0, cap_height_em)
         self.update()
 
     def clear(self) -> None:
@@ -111,6 +147,12 @@ class VectorPreviewWidget(QWidget):
             int(ox + draw_w), int(baseline_screen_y),
         )
 
+        # --- Per-kind reference lines ---
+        # Each ratio maps to an em height of ratio * cap_height_em. Top
+        # kinds are drawn above the baseline; the descender is drawn below.
+        # The em value is labeled on the left of each line.
+        self._draw_kind_lines(painter, ox, draw_w, baseline_screen_y, scale)
+
         # --- Glyph outline ---
         if self._vg is None or not self._vg.parts:
             painter.setPen(QColor(150, 150, 150))
@@ -133,6 +175,77 @@ class VectorPreviewWidget(QWidget):
                 painter.setBrush(em_rect_color)
                 painter.setPen(Qt.NoPen)
                 painter.drawPolygon(hpoly)
+
+    # --- Internal: reference lines ---
+
+    def _draw_kind_lines(
+        self,
+        painter: QPainter,
+        ox: float,
+        draw_w: float,
+        baseline_screen_y: float,
+        scale: float,
+    ) -> None:
+        """Draw one horizontal reference line per kind-ratio entry.
+
+        Each line sits at ``y = ratio * cap_height_em`` em units above the
+        baseline (top kinds) or below it (descender), spanning the em-box
+        width. The em value is labeled on the left, in the line's color.
+        Lines are clipped to the em box; kinds whose line falls outside
+        [descent, ascent] are skipped.
+        """
+        if not self._kind_ratios:
+            return
+        label_font = QFont("SansSerif", 7)
+        painter.setFont(label_font)
+        x_left = int(ox)
+        x_right = int(ox + draw_w)
+        # Order: top kinds (descending height) first, then descender, so
+        # labels don't overlap as badly.
+        ordered = sorted(
+            self._kind_ratios.items(),
+            key=lambda kv: (
+                0 if Kind(kv[0]) in _TOP_KINDS else 1,
+                -kv[1],
+            ),
+        )
+        # Track label y positions to nudge overlapping labels apart.
+        used_label_ys: list[int] = []
+        for kind, ratio in ordered:
+            try:
+                k = Kind(kind)
+            except ValueError:
+                continue
+            em = ratio * self._cap_height_em
+            if k in _TOP_KINDS:
+                fy = em
+            elif k in _BOTTOM_KINDS:
+                fy = -em
+            else:
+                continue
+            # Skip if outside the em box.
+            if fy > self._ascent or fy < self._descent:
+                continue
+            screen_y = int(baseline_screen_y - fy * scale)
+            color = _KIND_COLORS.get(kind, QColor(120, 120, 120))
+            painter.setPen(QPen(color, 1, Qt.DashLine))
+            painter.drawLine(x_left, screen_y, x_right, screen_y)
+            # Label: "<kind> <em>em" on the left, nudged off overlapping.
+            label = f"{kind} {em:.0f}em"
+            fm = painter.fontMetrics()
+            lw = fm.horizontalAdvance(label)
+            lh = fm.height()
+            ly = screen_y - lh // 2 + fm.ascent() // 2
+            # Nudge so labels don't stack on the same pixel.
+            while any(abs(ly - uy) < lh - 2 for uy in used_label_ys):
+                ly += lh - 2
+            used_label_ys.append(ly)
+            # Draw a small background pad for readability.
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 200))
+            painter.drawRect(x_left + 1, ly - fm.ascent() + 1, lw + 4, lh)
+            painter.setPen(color)
+            painter.drawText(x_left + 3, ly, label)
 
 
 # ---------------------------------------------------------------------------

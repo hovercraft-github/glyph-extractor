@@ -219,6 +219,8 @@ class GlyphBrowserWidget(QWidget):
             ascent=self._project.ascent,
             descent=self._project.descent,
             advance=adv,
+            kind_ratios=self._project.kind_ratios,
+            cap_height_em=700.0,
         )
         self.metrics_view.setPlainText(_metrics_text(inst, self._project))
 

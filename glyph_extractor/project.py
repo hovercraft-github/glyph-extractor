@@ -254,6 +254,11 @@ class Project:
             self.selected.pop(codepoint, None)
         else:
             self._auto_select(codepoint)
+        # Re-calibrate per-kind ratios from the updated instance set so the
+        # scale factor (and the preview reference lines) reflect the
+        # remaining data. A deleted instance may have been the only sample
+        # of its kind, shifting the calibrated ratios.
+        self.calibrate_kind_ratios()
         self.modified_at = time.time()
 
     def set_selected(self, codepoint: str, index: int) -> None:
@@ -340,10 +345,18 @@ class Project:
             cap_ref = reg_ref / DEFAULT_KIND_RATIOS[Kind.REGULAR.value]
 
         ratios = dict(DEFAULT_KIND_RATIOS)
+        cap_ratio = 1.0  # cap-relative reference is 1.0 by definition
         for k in (Kind.CAPITAL, Kind.ASCENDER, Kind.REGULAR, Kind.SPECIAL):
             m = _median(tops.get(k.value, []))
             if m is not None and m > 0:
-                ratios[k.value] = m / cap_ref
+                r = m / cap_ref
+                # Special symbols (degree, superscripts) must never exceed
+                # the capital height — they occupy the cap-height band at
+                # most. Clamp to the capital ratio so their reference line
+                # never draws above the capital line.
+                if k is Kind.SPECIAL:
+                    r = min(r, cap_ratio)
+                ratios[k.value] = r
         for k in (Kind.DESCENDER,):
             m = _median(bots.get(k.value, []))
             if m is not None and m > 0:
