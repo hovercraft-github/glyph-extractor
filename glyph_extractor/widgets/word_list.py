@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 
 from ..letter_kinds import word_is_committable
 from ..models import Word
+from ..project import DEFAULT_ASCENDERS, DEFAULT_DESCENDERS
 
 
 class WordListWidget(QWidget):
@@ -45,6 +46,26 @@ class WordListWidget(QWidget):
 
         self._words: List[Word] = []
         self._suppress_changed = False
+        # Per-project letter-classification sets for the committability
+        # check. Defaults match ``letter_kinds``; the main window updates
+        # these when a project is opened/created.
+        self._ascenders: set = set(DEFAULT_ASCENDERS)
+        self._descenders: set = set(DEFAULT_DESCENDERS)
+
+    def set_classification(
+        self, ascenders: str, descenders: str
+    ) -> None:
+        """Set the project's ascender/descender letter lists.
+
+        Used by the committability check (faded / non-markable words) so it
+        matches the project's per-project classification. Call before
+        ``set_words`` so the initial coloring reflects the project.
+        """
+        self._ascenders = set(ascenders)
+        self._descenders = set(descenders)
+
+    def _is_committable(self, text: str) -> bool:
+        return word_is_committable(text, self._ascenders, self._descenders)
 
     def set_words(self, words: List[Word]) -> None:
         self._words = words
@@ -96,7 +117,7 @@ class WordListWidget(QWidget):
         # if the word is now committable (has a non-descender letter).
         # Disallowed words stay faded; the user can still edit them, and
         # once a non-descender letter is introduced they become committable.
-        if word_is_committable(new_text):
+        if self._is_committable(new_text):
             word.marked = True
         else:
             word.marked = False
@@ -120,7 +141,7 @@ class WordListWidget(QWidget):
         - **Unmarked & committable** → palette default text color (visible
           under both light and dark themes).
         """
-        committable = word_is_committable(word.text)
+        committable = self._is_committable(word.text)
         if not committable:
             # Disallowed: faded grey, never green.
             item.setForeground(QColor(150, 150, 150))
@@ -140,7 +161,7 @@ class WordListWidget(QWidget):
         # they cannot anchor a baseline, so committing them would produce
         # wrong glyph positions. The user can still edit them; once a
         # non-descender letter is introduced the word becomes committable.
-        if not word.marked and not word_is_committable(word.text):
+        if not word.marked and not self._is_committable(word.text):
             QMessageBox.information(
                 self,
                 "Cannot mark word",

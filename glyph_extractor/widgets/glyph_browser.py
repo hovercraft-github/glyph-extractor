@@ -339,6 +339,9 @@ def _metrics_text(inst: GlyphInstance, proj: Project) -> str:
     x, y, w, h = inst.bbox
     adv_em = advance_width_em(inst, proj)
     f = proj.word_scale_factor_for(inst.word_kinds)
+    # The per-instance scale is recomputed by advance_width_em above (which
+    # calls _compute_scale), so inst.scale_factor is now current.
+    inst_scale = inst.scale_factor
     return (
         f"char: {inst.char}   codepoint: U+{inst.codepoint.upper()}\n"
         f"UPEM: {proj.units_per_em}   ascent: {proj.ascent}   descent: {proj.descent}\n"
@@ -346,6 +349,8 @@ def _metrics_text(inst: GlyphInstance, proj: Project) -> str:
         f"advance width: {inst.advance_width_px} px  →  {adv_em} em units\n"
         f"word kinds: {word_kinds_labels(inst.word_kinds)}   "
         f"scale factor F={f:.2f}\n"
+        f"instance scale: {inst_scale:.3f} px→em "
+        f"(per-kind normalized)\n"
         f"baseline y: {inst.baseline_y} px   "
         f"baseline offset: {inst.baseline_y - (y + h)} px (descender if <0)\n"
         f"OCR conf: {inst.ocr_conf:.1f}\n"

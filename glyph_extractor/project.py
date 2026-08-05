@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .letter_kinds import (
+    DEFAULT_ASCENDERS,
+    DEFAULT_DESCENDERS,
     DEFAULT_KIND_RATIOS,
     Kind,
     _BOTTOM_KINDS,
@@ -79,6 +81,12 @@ class GlyphInstance:
     # ``Project.word_scale_factor``) so that glyphs from words of different
     # vertical composition are normalized to a common cap-height reference.
     word_kinds: Tuple[str, ...] = field(default_factory=tuple)
+    # Per-instance px→em scale factor used to normalize this glyph's top to
+    # its letter-kind reference line (capital / ascender / regular). Stored
+    # for reference (e.g. shown in the browser metrics); recomputed on demand
+    # by ``vectorize._compute_scale``. A value of 0.0 means "not yet
+    # computed"; the word-level composition scale is used as a fallback.
+    scale_factor: float = 0.0
     # Quality signal used for auto-selection.
     ocr_conf: float = 0.0
     # Raster preview stored inline as base64 PNG (small crops).
@@ -179,6 +187,13 @@ class Project:
     kind_ratios: Dict[str, float] = field(
         default_factory=lambda: dict(DEFAULT_KIND_RATIOS)
     )
+    # Per-project letter-classification lists (not locale-dependent). These
+    # define which lowercase letters are ASCENDER vs DESCENDER vs REGULAR,
+    # driving baseline anchoring, the word scale factor, per-kind glyph
+    # normalization, and kind-ratio calibration. Editable in the settings
+    # dialog; defaults suit a typical Cyrillic + Latin handwriting font.
+    ascenders: str = DEFAULT_ASCENDERS
+    descenders: str = DEFAULT_DESCENDERS
     # Filesystem location (set on load/save).
     path: Optional[str] = None
 
@@ -215,7 +230,11 @@ class Project:
         # Letter kinds present in this word — used to compute the per-word
         # scale factor F (see ``word_scale_factor``) so glyphs from words of
         # different vertical composition normalize to a common cap height.
-        wk = word_kinds_from_chars(s.char for s in word.symbols if s.char)
+        wk = word_kinds_from_chars(
+            (s.char for s in word.symbols if s.char),
+            self.ascender_set(),
+            self.descender_set(),
+        )
         for sym in word.symbols:
             if not sym.char:
                 continue
@@ -284,6 +303,20 @@ class Project:
         best_idx = max(range(len(instances)), key=lambda i: instances[i].quality_score())
         self.selected[codepoint] = best_idx
 
+    # --- Letter classification (per-project) ---
+
+    def ascender_set(self) -> set:
+        """The set of ascender characters for this project."""
+        return set(self.ascenders)
+
+    def descender_set(self) -> set:
+        """The set of descender characters for this project."""
+        return set(self.descenders)
+
+    def letter_kinds_for(self, char: str):
+        """Classify ``char`` using this project's ascender/descender lists."""
+        return letter_kinds(char, self.ascender_set(), self.descender_set())
+
     # --- Word-composition scale factor ---
 
     def word_scale_factor_for(self, word_kinds: Tuple[str, ...]) -> float:
@@ -322,7 +355,7 @@ class Project:
                 bx, by, bw, bh = inst.bbox
                 top_px = inst.baseline_y - by
                 bot_px = (by + bh) - inst.baseline_y
-                for k in letter_kinds(inst.char):
+                for k in self.letter_kinds_for(inst.char):
                     if k in _TOP_KINDS:
                         if top_px > 0:
                             tops[k.value].append(float(top_px))
@@ -432,6 +465,7 @@ def _instance_from_dict(d: dict) -> GlyphInstance:
         original_baseline_y=d.get("original_baseline_y", bl),
         parts=[_part_from_dict(p) for p in d.get("parts", [])],
         word_kinds=tuple(d.get("word_kinds", ())),
+        scale_factor=float(d.get("scale_factor", 0.0)),
         ocr_conf=d.get("ocr_conf", 0.0),
         preview_png_b64=d.get("preview_png_b64", ""),
         vector_cache=None,
@@ -449,13 +483,15 @@ def _project_to_dict(proj: Project) -> dict:
         "ocr_lang": proj.ocr_lang,
         "tesseract_cmd": proj.tesseract_cmd,
         "kind_ratios": dict(proj.kind_ratios),
+        "ascenders": proj.ascenders,
+        "descenders": proj.descenders,
         "glyphs": {
             cp: [_instance_to_dict(i) for i in instances]
             for cp, instances in proj.glyphs.items()
         },
         "selected": dict(proj.selected),
         "format": "glyph-extractor-project",
-        "version": 4,
+        "version": 5,
     }
 
 
@@ -471,6 +507,8 @@ def _project_from_dict(d: dict) -> Project:
         ocr_lang=d.get("ocr_lang", "rus+eng"),
         tesseract_cmd=d.get("tesseract_cmd", ""),
         kind_ratios=dict(d.get("kind_ratios") or DEFAULT_KIND_RATIOS),
+        ascenders=d.get("ascenders") or DEFAULT_ASCENDERS,
+        descenders=d.get("descenders") or DEFAULT_DESCENDERS,
         glyphs={
             cp: [_instance_from_dict(i) for i in instances]
             for cp, instances in d.get("glyphs", {}).items()

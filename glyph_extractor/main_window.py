@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Error", f"Could not create project:\n{exc}")
             return
+        self._sync_word_list_classification()
         self.glyph_browser.set_project(self._project)
         self._update_status_bar()
         QMessageBox.information(self, "Project created", f"New project:\n{path}")
@@ -189,6 +190,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Error", f"Could not open project:\n{exc}")
             return
+        self._sync_word_list_classification()
         self.glyph_browser.set_project(self._project)
         self._update_status_bar()
 
@@ -265,7 +267,27 @@ class MainWindow(QMainWindow):
                     save_project(self._project)
                 except Exception as exc:  # noqa: BLE001
                     QMessageBox.warning(self, "Save error", f"Failed to save settings:\n{exc}")
+            # Re-apply the (possibly changed) ascender/descender lists to
+            # the word list and re-calibrate kind ratios so previews and
+            # the committability check reflect the new classification.
+            self._sync_word_list_classification()
+            self._project.calibrate_kind_ratios()
+            self.glyph_browser.refresh()
             self._update_status_bar()
+
+    def _sync_word_list_classification(self) -> None:
+        """Push the project's ascender/descender lists to the word list.
+
+        Also re-applies coloring to already-loaded words so the faded
+        (disallowed) state matches the current classification.
+        """
+        if self._project is None:
+            return
+        self.word_list.set_classification(self._project.ascenders, self._project.descenders)
+        # Re-color existing items if words are already loaded.
+        words = self.word_list.get_words()
+        if words:
+            self.word_list.set_words(words)
 
     # --- File actions ---
 

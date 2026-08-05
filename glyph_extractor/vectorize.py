@@ -31,6 +31,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from .letter_kinds import Kind, letter_kinds
 from .models import GlyphPart
 from .project import GlyphInstance, Project
 
@@ -240,24 +241,89 @@ def _vectorized_from_cache(d: dict) -> VectorizedGlyph:
 # ---------------------------------------------------------------------------
 
 
-def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:
-    """Pixels → em units, normalized to a common cap-height reference.
+def _kind_target_em(inst: GlyphInstance, proj: Project, cap_height_em: float) -> Optional[float]:
+    """Target em height of this glyph's top reference line, or None.
 
-    The per-word scale factor ``F`` (see ``Project.word_scale_factor_for``)
+    Returns the em height (above the baseline) that the glyph's *own* top
+    should be normalized to, based on the letter kind(s) of its character:
+
+    - CAPITAL (letters + digits) → ``cap_height_em`` (capitals line).
+    - ASCENDER (lowercase ascenders) → ``ascender_ratio * cap_height_em``
+      (ascenders line).
+    - REGULAR (non-ascender lowercase) → ``regular_ratio * cap_height_em``
+      (regulars line).
+    - DESCENDER (lowercase descenders: g, j, p, q, y, у, р, д, ц, щ, …) →
+      ``regular_ratio * cap_height_em`` (regulars line). A descender's top
+      sits at the x-height just like a regular letter; only its bottom
+      drops below the baseline. So its *top* is normalized to the regulars
+      line, and its descender depth follows proportionally.
+    - SPECIAL / FLOATING / UNKNOWN → ``None`` (leave as-is: use the
+      word-level composition scale).
+
+    For dual-kind glyphs (e.g. Cyrillic ``ф`` = ascender + descender) the
+    *top* kind wins, since we normalize the top to its reference line.
+    """
+    kinds = letter_kinds(inst.char, proj.ascender_set(), proj.descender_set())
+    # Prefer the top-extent kind for normalization (the descender part is
+    # below the baseline and does not define the top).
+    if Kind.CAPITAL in kinds:
+        return cap_height_em
+    if Kind.ASCENDER in kinds:
+        ratio = proj.kind_ratios.get(Kind.ASCENDER.value, 0.8)
+        return ratio * cap_height_em
+    if Kind.REGULAR in kinds or Kind.DESCENDER in kinds:
+        # Regulars and descenders both sit at the x-height on top; a
+        # descender's bottom drops below the baseline, but its top is
+        # normalized to the regulars line.
+        ratio = proj.kind_ratios.get(Kind.REGULAR.value, 0.6)
+        return ratio * cap_height_em
+    return None
+
+
+def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:
+    """Pixels → em units, normalized per the glyph's own letter kind.
+
+    Two strategies, selected by the glyph's letter kind:
+
+    **Per-kind normalization** (capitals, ascenders, regulars): the glyph's
+    own top (``baseline_y - bbox.y`` px above the baseline) is mapped to its
+    kind's reference line in em units:
+
+        scale = target_em / glyph_top_px
+
+    where ``target_em`` is ``cap_height_em`` (capitals), ``ascender_ratio *
+    cap_height_em`` (ascenders), or ``regular_ratio * cap_height_em``
+    (regulars). This makes each glyph's top touch its reference line
+    regardless of the accidental vertical composition of the source word.
+
+    **Word-level fallback** (descenders, special, floating, unknown): the
+    per-word scale factor ``F`` (see ``Project.word_scale_factor_for``)
     expresses the source word's vertical extent as a multiple of the cap
-    height (cap = 1.0). Dividing the word bbox height by ``F`` recovers the
-    composition-independent cap height in pixels, which is then mapped to
-    ``cap_height_em`` em units:
+    height. Dividing the word bbox height by ``F`` recovers the
+    composition-independent cap height in pixels, mapped to ``cap_height_em``:
 
         scale = cap_height_em * F / word_h
 
-    This makes a glyph's em size depend on its *letter kind* (cap, x-height,
-    descender, …) rather than on the accidental vertical composition of the
-    source word it was extracted from.
+    The computed scale is cached on ``inst.scale_factor`` for reference
+    (shown in the browser metrics and serialized to the DB).
     """
+    # Per-kind normalization: map the glyph's own top to its reference line.
+    target_em = _kind_target_em(inst, proj, cap_height_em)
+    if target_em is not None:
+        bx, by, bw, bh = inst.bbox
+        glyph_top_px = inst.baseline_y - by
+        if glyph_top_px > 0:
+            scale = target_em / glyph_top_px
+            inst.scale_factor = scale
+            return scale
+        # Degenerate (top at/below baseline): fall through to word-level.
+
+    # Word-level composition fallback.
     word_h = inst.word_bbox[3] if inst.word_bbox[3] > 0 else inst.bbox[3]
     f = proj.word_scale_factor_for(inst.word_kinds)
-    return cap_height_em * f / max(word_h, 1)
+    scale = cap_height_em * f / max(word_h, 1)
+    inst.scale_factor = scale
+    return scale
 
 
 def word_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:

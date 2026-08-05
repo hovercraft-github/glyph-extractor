@@ -91,6 +91,33 @@ class SettingsDialog(QDialog):
 
         root.addSpacing(8)
 
+        # --- Letter classification section ---
+        cls_title = QLabel("Letter classification")
+        cls_title.setStyleSheet("font-weight: bold;")
+        root.addWidget(cls_title)
+
+        cls_form = QFormLayout()
+        self._asc_edit = QLineEdit(project.ascenders)
+        self._asc_edit.setPlaceholderText("e.g. бвдёйфbdfhklt")
+        cls_form.addRow("Ascenders:", self._asc_edit)
+
+        self._desc_edit = QLineEdit(project.descenders)
+        self._desc_edit.setPlaceholderText("e.g. урцщфgjpqy")
+        cls_form.addRow("Descenders:", self._desc_edit)
+        root.addLayout(cls_form)
+
+        cls_hint = QLabel(
+            "Lowercase letters whose top rises above the x-height are "
+            "ascenders; those whose bottom drops below the baseline are "
+            "descenders. A letter in both lists (e.g. ф) is both. All other "
+            "lowercase letters are regular. Not locale-dependent."
+        )
+        cls_hint.setWordWrap(True)
+        cls_hint.setStyleSheet("color: gray; font-size: small;")
+        root.addWidget(cls_hint)
+
+        root.addSpacing(8)
+
         # --- Font metrics section ---
         font_title = QLabel("Font metrics (em units)")
         font_title.setStyleSheet("font-weight: bold;")
@@ -184,6 +211,12 @@ class SettingsDialog(QDialog):
         self._project.units_per_em = upem
         self._project.ascent = ascent
         self._project.descent = descent
+        # Letter classification lists: strip whitespace (spaces would be
+        # classified as floating anyway) and keep unique chars.
+        asc = "".join(c for c in self._asc_edit.text() if not c.isspace())
+        desc = "".join(c for c in self._desc_edit.text() if not c.isspace())
+        self._project.ascenders = asc
+        self._project.descenders = desc
         self._ok = True
 
     def accept(self) -> None:

@@ -24,7 +24,7 @@ height in pixels.
 from __future__ import annotations
 
 import enum
-from typing import Dict, Iterable, Set, Tuple
+from typing import Dict, Iterable, Optional, Set, Tuple
 
 
 class Kind(str, enum.Enum):
@@ -43,11 +43,22 @@ class Kind(str, enum.Enum):
 # Explicit character sets (Cyrillic + Latin)
 # ---------------------------------------------------------------------------
 
-# Ascenders: lowercase letters whose top rises above the x-height.
-_ASCENDERS = set("бйфъыьэ") | set("bdfhklt") | set("ß") | set("ƒ")
-# Descenders: lowercase letters whose bottom drops below the baseline.
-_DESCENDERS = set("урдцщф") | set("gjpqy") | set("ß") | set("ƒ") | set("þ")
-# ф is both ascender and descender; it appears in both sets above.
+# Default ascenders: lowercase letters whose top rises above the x-height.
+# Cyrillic defaults reflect a typical Russian handwriting font where
+# б в д ё й ф rise above the x-height. These are overridable per-project
+# (see ``Project.ascenders``).
+DEFAULT_ASCENDERS = "бвдёйфbdfhkltßƒ"
+# Default descenders: lowercase letters whose bottom drops below the
+# baseline. Cyrillic defaults: у р ц щ ф. Overridable per-project
+# (see ``Project.descenders``).
+DEFAULT_DESCENDERS = "урцщфgjpqyßƒþ"
+# ф is both ascender and descender; it appears in both default sets above.
+
+# Module-level sets used by the no-argument ``letter_kinds`` call. Kept in
+# sync with the defaults; callers needing project-specific classification
+# pass their own sets explicitly.
+_ASCENDERS = set(DEFAULT_ASCENDERS)
+_DESCENDERS = set(DEFAULT_DESCENDERS)
 
 # Special: glyphs that float near cap height (degree, superscript digits,
 # ordinal indicators). They occupy the cap-height band like capitals.
@@ -64,15 +75,27 @@ _FLOATING = set('"“”‘’´`ˆ¨˜˘˙˚¸˝„‟′″‴‵‶‷‹›�
 # ---------------------------------------------------------------------------
 
 
-def letter_kinds(char: str) -> Set[Kind]:
+def letter_kinds(
+    char: str,
+    ascenders: Optional[Set[str]] = None,
+    descenders: Optional[Set[str]] = None,
+) -> Set[Kind]:
     """Classify a single character into a set of :class:`Kind` values.
 
     Most characters yield a single kind; a few (e.g. Cyrillic ``ф``) yield
     two (ascender + descender). An empty/whitespace char returns an empty
     set.
+
+    ``ascenders`` / ``descenders`` override the module-default sets, allowing
+    per-project classification (see ``Project.ascenders`` /
+    ``Project.descenders``). When omitted, the defaults
+    (:data:`DEFAULT_ASCENDERS` / :data:`DEFAULT_DESCENDERS`) are used.
     """
     if not char:
         return set()
+
+    asc = ascenders if ascenders is not None else _ASCENDERS
+    desc = descenders if descenders is not None else _DESCENDERS
 
     kinds: Set[Kind] = set()
 
@@ -84,9 +107,9 @@ def letter_kinds(char: str) -> Set[Kind]:
         kinds.add(Kind.SPECIAL)
         return kinds
 
-    if char in _ASCENDERS:
+    if char in asc:
         kinds.add(Kind.ASCENDER)
-    if char in _DESCENDERS:
+    if char in desc:
         kinds.add(Kind.DESCENDER)
 
     if kinds:
@@ -178,17 +201,24 @@ def word_scale_factor(
     return f if f > 0 else 1.0
 
 
-def word_kinds_from_chars(chars: Iterable[str]) -> Tuple[Kind, ...]:
+def word_kinds_from_chars(
+    chars: Iterable[str],
+    ascenders: Optional[Set[str]] = None,
+    descenders: Optional[Set[str]] = None,
+) -> Tuple[Kind, ...]:
     """Compute the sorted set of extent kinds present in a word.
 
     Floating and unknown characters are excluded (they do not define the
     word's vertical extent). The result is a stable, hashable tuple sorted
     by the :class:`Kind` enum order, suitable for storing on a
     ``GlyphInstance``.
+
+    ``ascenders`` / ``descenders`` override the module-default sets for
+    per-project classification.
     """
     present: Set[Kind] = set()
     for ch in chars:
-        for k in letter_kinds(ch):
+        for k in letter_kinds(ch, ascenders, descenders):
             if k in _EXTENT_KINDS:
                 present.add(k)
     return tuple(sorted(present, key=lambda k: k.value))
@@ -224,7 +254,11 @@ _NON_DESCENDER_KINDS = {
 }
 
 
-def word_is_committable(chars: Iterable[str]) -> bool:
+def word_is_committable(
+    chars: Iterable[str],
+    ascenders: Optional[Set[str]] = None,
+    descenders: Optional[Set[str]] = None,
+) -> bool:
     """True if *chars* contain at least one non-descender letter.
 
     Descender-only words (e.g. ``уру``), floating/punctuation-only words,
@@ -232,9 +266,12 @@ def word_is_committable(chars: Iterable[str]) -> bool:
     every glyph bottom sits below (or above) the true baseline, so the
     per-word baseline estimate would be wrong. Such words are *disallowed*
     for committing until the user edits in a non-descender letter.
+
+    ``ascenders`` / ``descenders`` override the module-default sets for
+    per-project classification.
     """
     for ch in chars:
-        kinds = letter_kinds(ch)
+        kinds = letter_kinds(ch, ascenders, descenders)
         if kinds & _NON_DESCENDER_KINDS:
             return True
     return False
