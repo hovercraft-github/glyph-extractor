@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..letter_kinds import word_is_committable
 from ..models import Word
 
 
@@ -87,26 +88,43 @@ class WordListWidget(QWidget):
             self._suppress_changed = False
             return
         word.set_text(new_text)
-        # An edit just finished: mark the word green immediately so its
-        # glyphs are collected without requiring a second Enter. Re-baseline
-        # the "original" text to the new value so unmarking clears green.
+        # Re-baseline the "original" text to the new value so unmarking
+        # clears green.
         word.original_text = new_text
-        word.marked = True
+        # An edit just finished: mark the word green immediately so its
+        # glyphs are collected without requiring a second Enter — but only
+        # if the word is now committable (has a non-descender letter).
+        # Disallowed words stay faded; the user can still edit them, and
+        # once a non-descender letter is introduced they become committable.
+        if word_is_committable(new_text):
+            word.marked = True
+        else:
+            word.marked = False
         # Suppress itemChanged: setForeground triggers it, causing re-entrancy.
         self._suppress_changed = True
         self._apply_edit_color(item, word)
         self._suppress_changed = False
         self.words_changed.emit()
-        self.word_marked.emit(word)
+        if word.marked:
+            self.word_marked.emit(word)
 
     def _apply_edit_color(self, item: QListWidgetItem, word: Word) -> None:
-        """Color the item green if it is marked (collected into the project).
+        """Color the item according to its mark state and committability.
 
-        Unmarked items use the palette's default text color so they remain
-        visible under both light and dark themes. The "edited but unmarked"
-        case is intentionally not green: marking is the single source of
-        truth for "collected".
+        - **Marked & committable** → green (collected into the project).
+        - **Disallowed** (no non-descender letter) → faded grey, regardless
+          of the ``marked`` flag: such words cannot anchor a baseline, so
+          they must not be committed. The user can still edit them; once a
+          non-descender letter is introduced the word becomes committable
+          and can be marked green.
+        - **Unmarked & committable** → palette default text color (visible
+          under both light and dark themes).
         """
+        committable = word_is_committable(word.text)
+        if not committable:
+            # Disallowed: faded grey, never green.
+            item.setForeground(QColor(150, 150, 150))
+            return
         if word.marked:
             item.setForeground(QColor(0, 170, 0))
         else:
@@ -118,6 +136,20 @@ class WordListWidget(QWidget):
         if row < 0 or row >= len(self._words):
             return
         word = self._words[row]
+        # Disallowed words (no non-descender letter) cannot be marked green:
+        # they cannot anchor a baseline, so committing them would produce
+        # wrong glyph positions. The user can still edit them; once a
+        # non-descender letter is introduced the word becomes committable.
+        if not word.marked and not word_is_committable(word.text):
+            QMessageBox.information(
+                self,
+                "Cannot mark word",
+                "This word contains no non-descender letter, so the "
+                "baseline cannot be detected reliably.\n"
+                "Edit the word to include at least one regular, capital, "
+                "or ascender letter (e.g. a, A, b) to allow marking it.",
+            )
+            return
         word.marked = not word.marked
         item = self.list_widget.item(row)
         # Suppress itemChanged: setForeground triggers it, which would re-enter

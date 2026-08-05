@@ -206,3 +206,35 @@ def word_kinds_labels(kinds: Iterable) -> str:
     for k in kinds:
         labels.append(k.value if isinstance(k, Kind) else str(k))
     return ", ".join(labels)
+
+
+# ---------------------------------------------------------------------------
+# Committability — does a word have a reliable baseline anchor?
+# ---------------------------------------------------------------------------
+
+# Kinds whose bbox bottom coincides with the baseline (non-descenders).
+# A word must contain at least one such letter for the baseline to be
+# detectable; descender-only or floating-only words cannot anchor it.
+# SPECIAL (degree sign, superscripts) is excluded: those are symbols, not
+# letters, so they do not by themselves make a word committable.
+_NON_DESCENDER_KINDS = {
+    Kind.CAPITAL,
+    Kind.ASCENDER,
+    Kind.REGULAR,
+}
+
+
+def word_is_committable(chars: Iterable[str]) -> bool:
+    """True if *chars* contain at least one non-descender letter.
+
+    Descender-only words (e.g. ``уру``), floating/punctuation-only words,
+    and special-symbol-only words (e.g. ``°``) cannot anchor a baseline:
+    every glyph bottom sits below (or above) the true baseline, so the
+    per-word baseline estimate would be wrong. Such words are *disallowed*
+    for committing until the user edits in a non-descender letter.
+    """
+    for ch in chars:
+        kinds = letter_kinds(ch)
+        if kinds & _NON_DESCENDER_KINDS:
+            return True
+    return False
