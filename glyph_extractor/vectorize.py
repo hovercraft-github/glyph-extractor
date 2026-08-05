@@ -280,6 +280,29 @@ def _kind_target_em(inst: GlyphInstance, proj: Project, cap_height_em: float) ->
     return None
 
 
+# Letter kinds that sit ON the baseline (their bbox bottom = baseline).
+# Used to decide whether "Put on baseline" is safe to apply automatically.
+# Descenders are excluded (their bottom drops below the baseline); special
+# symbols and unknown/punctuation are excluded (they are not letters).
+_BASELINE_ANCHORING_KINDS = {Kind.CAPITAL, Kind.ASCENDER, Kind.REGULAR}
+
+
+def _is_baseline_anchoring_letter(inst: GlyphInstance, proj: Project) -> bool:
+    """True if the glyph is a non-descender letter that sits on the baseline.
+
+    Capitals, ascenders, and regulars have their bbox bottom on the
+    baseline, so "Put on baseline" is always correct for them. Capital+
+    descender letters (e.g. Cyrillic Ц, Щ, Д) and plain descenders have a
+    bottom that extends below the baseline, so they are excluded. Special
+    symbols, floating punctuation, and unknown/punctuation glyphs are also
+    excluded (they are not letters).
+    """
+    kinds = proj.letter_kinds_for(inst.char)
+    if Kind.DESCENDER in kinds:
+        return False
+    return bool(kinds & _BASELINE_ANCHORING_KINDS)
+
+
 def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 700.0) -> float:
     """Pixels → em units, normalized per the glyph's own letter kind.
 
@@ -296,6 +319,13 @@ def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 70
     (regulars). This makes each glyph's top touch its reference line
     regardless of the accidental vertical composition of the source word.
 
+    For **non-descender letters** the "Put on baseline" action
+    (``inst.put_on_baseline``) is applied first: a non-descender's bbox
+    bottom *is* the baseline by definition, so anchoring there corrects
+    per-word baseline estimation error. This reuses the same mechanism as
+    the browser's "Put on baseline" button. Descenders keep their stored
+    line-aware baseline (their bottom drops below it).
+
     **Word-level fallback** (descenders, special, floating, unknown): the
     per-word scale factor ``F`` (see ``Project.word_scale_factor_for``)
     expresses the source word's vertical extent as a multiple of the cap
@@ -307,6 +337,13 @@ def _compute_scale(inst: GlyphInstance, proj: Project, cap_height_em: float = 70
     The computed scale is cached on ``inst.scale_factor`` for reference
     (shown in the browser metrics and serialized to the DB).
     """
+    # Non-descenders: anchor the baseline to the glyph's bbox bottom (the
+    # "Put on baseline" action). Reuses inst.put_on_baseline so the effect
+    # is identical to the browser button and original_baseline_y is
+    # preserved for "Re-vectorize" to restore.
+    if _is_baseline_anchoring_letter(inst, proj):
+        inst.put_on_baseline()
+
     # Per-kind normalization: map the glyph's own top to its reference line.
     target_em = _kind_target_em(inst, proj, cap_height_em)
     if target_em is not None:

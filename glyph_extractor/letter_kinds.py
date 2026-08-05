@@ -47,11 +47,11 @@ class Kind(str, enum.Enum):
 # Cyrillic defaults reflect a typical Russian handwriting font where
 # б в д ё й ф rise above the x-height. These are overridable per-project
 # (see ``Project.ascenders``).
-DEFAULT_ASCENDERS = "бвдёйфbdfhkltßƒ"
+DEFAULT_ASCENDERS = "бвдёйЙфbdfhkltßƒ"
 # Default descenders: lowercase letters whose bottom drops below the
 # baseline. Cyrillic defaults: у р ц щ ф. Overridable per-project
 # (see ``Project.descenders``).
-DEFAULT_DESCENDERS = "урцщфgjpqyßƒþ"
+DEFAULT_DESCENDERS = "ДЦЩурцщфgjpqyßƒþ"
 # ф is both ascender and descender; it appears in both default sets above.
 
 # Module-level sets used by the no-argument ``letter_kinds`` call. Kept in
@@ -112,26 +112,32 @@ def letter_kinds(
     if char in desc:
         kinds.add(Kind.DESCENDER)
 
-    if kinds:
-        # Resolved via explicit sets (covers dual-kind cases like ф).
-        return kinds
-
-    # Unicode-category fallback.
+    # Unicode-category fallback. Always run it so that uppercase letters
+    # that are also descenders (e.g. Cyrillic Ц, Щ, Д) get CAPITAL added on
+    # top of DESCENDER — they are capital+descender. For lowercase letters
+    # already classified via the explicit sets (ascender/descender), do NOT
+    # add REGULAR (they are not regular). REGULAR is only assigned to
+    # lowercase letters not in either explicit set.
     cat = _unicode_category(char)
     if cat == "Lu":
         kinds.add(Kind.CAPITAL)
     elif cat == "Nd":
         # Digits occupy the cap-height band.
         kinds.add(Kind.CAPITAL)
-    elif cat == "Ll":
-        kinds.add(Kind.REGULAR)
     elif cat == "Lt":
         # Titlecase (e.g. ǅ) — treat as capital.
         kinds.add(Kind.CAPITAL)
-    elif cat in ("Lu", "Lm"):
+    elif cat == "Lm":
         kinds.add(Kind.CAPITAL)
+    elif cat == "Ll":
+        # Only assign REGULAR if the letter wasn't already classified as
+        # ascender/descender via the explicit sets.
+        if not kinds:
+            kinds.add(Kind.REGULAR)
     else:
-        kinds.add(Kind.UNKNOWN)
+        # Non-letter (punctuation, symbol, …) not in the explicit sets.
+        if not kinds:
+            kinds.add(Kind.UNKNOWN)
 
     return kinds
 
