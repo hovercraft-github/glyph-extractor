@@ -26,7 +26,7 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QWidget
 
-from ..letter_kinds import DEFAULT_KIND_RATIOS, Kind
+from ..letter_kinds import CAPITAL_ASCENDER_KEY, DEFAULT_KIND_RATIOS, Kind
 from ..vectorize import VectorizedGlyph
 
 # Distinct color per kind for the reference lines. Order matches the
@@ -38,11 +38,14 @@ _KIND_COLORS: Dict[str, QColor] = {
     Kind.REGULAR.value: QColor(130, 0, 170),   # purple
     Kind.SPECIAL.value: QColor(0, 130, 130),   # teal
     Kind.DESCENDER.value: QColor(170, 0, 0),   # red
+    CAPITAL_ASCENDER_KEY: QColor(0, 160, 0),   # green (above capitals line)
 }
 
 # Kinds whose ratio is a *top* extent (above the baseline) vs a *bottom*
 # extent (below the baseline). Mirrors letter_kinds._TOP_KINDS/_BOTTOM_KINDS.
 _TOP_KINDS = {Kind.CAPITAL, Kind.ASCENDER, Kind.REGULAR, Kind.SPECIAL}
+# Synthetic string ratio keys (not Kind enum values) that are top extents.
+_TOP_RATIO_KEYS = {CAPITAL_ASCENDER_KEY}
 _BOTTOM_KINDS = {Kind.DESCENDER}
 
 
@@ -202,22 +205,27 @@ class VectorPreviewWidget(QWidget):
         x_right = int(ox + draw_w)
         # Order: top kinds (descending height) first, then descender, so
         # labels don't overlap as badly.
-        ordered = sorted(
-            self._kind_ratios.items(),
-            key=lambda kv: (
-                0 if Kind(kv[0]) in _TOP_KINDS else 1,
-                -kv[1],
-            ),
-        )
+        def _sort_key(kv):
+            # Synthetic string keys (e.g. capital_ascender) are top kinds.
+            if kv[0] in _TOP_RATIO_KEYS:
+                return (0, -kv[1])
+            try:
+                return (0 if Kind(kv[0]) in _TOP_KINDS else 1, -kv[1])
+            except ValueError:
+                return (1, -kv[1])
+
+        ordered = sorted(self._kind_ratios.items(), key=_sort_key)
         # Track label y positions to nudge overlapping labels apart.
         used_label_ys: list[int] = []
         for kind, ratio in ordered:
-            try:
-                k = Kind(kind)
-            except ValueError:
-                continue
+            is_ratio_key = kind in _TOP_RATIO_KEYS
+            if not is_ratio_key:
+                try:
+                    k = Kind(kind)
+                except ValueError:
+                    continue
             em = ratio * self._cap_height_em
-            if k in _TOP_KINDS:
+            if is_ratio_key or k in _TOP_KINDS:
                 fy = em
             elif k in _BOTTOM_KINDS:
                 fy = -em

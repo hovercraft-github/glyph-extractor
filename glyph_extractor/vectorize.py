@@ -266,6 +266,16 @@ def _kind_target_em(inst: GlyphInstance, proj: Project, cap_height_em: float) ->
     kinds = letter_kinds(inst.char, proj.ascender_set(), proj.descender_set())
     # Prefer the top-extent kind for normalization (the descender part is
     # below the baseline and does not define the top).
+    # Capital+ascender (uppercase letter in the ascenders set, e.g. Ё, Й):
+    # its top sits above the capitals line, so normalize to the
+    # capital_ascender ratio (higher than cap_height_em). Check this before
+    # the plain CAPITAL branch so it wins.
+    if Kind.CAPITAL in kinds and Kind.ASCENDER in kinds:
+        ratio = proj.kind_ratios.get("capital_ascender", 1.1)
+        target = ratio * cap_height_em
+        # Keep within the EM box top (ascent) so the glyph doesn't
+        # overflow the preview's white background / the font's ascent.
+        return min(target, float(proj.ascent))
     if Kind.CAPITAL in kinds:
         return cap_height_em
     if Kind.ASCENDER in kinds:

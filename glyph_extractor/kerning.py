@@ -114,7 +114,10 @@ def compute_kerning_pairs(
         word_bbox = parse_bbox(syms[0].get("word_bbox", syms[0]["bbox"]))
         word_h = word_bbox[3] if len(word_bbox) >= 4 else 1
         wk = word_kinds_from_chars(s.get("label", "") for s in syms)
-        kinds = tuple(Kind(k) for k in wk if k)
+        # wk may contain Kind enum values and/or synthetic string keys
+        # (e.g. capital_ascender). Keep strings as-is.
+        kinds = tuple(Kind(k) for k in wk if k and not isinstance(k, str))
+        kinds = kinds + tuple(k for k in wk if isinstance(k, str))
         f = word_scale_factor(kinds, ratios)
         scale = word_height_em * f / max(word_h, 1)
 

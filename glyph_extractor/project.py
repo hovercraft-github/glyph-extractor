@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .letter_kinds import (
+    CAPITAL_ASCENDER_KEY,
     DEFAULT_ASCENDERS,
     DEFAULT_DESCENDERS,
     DEFAULT_KIND_RATIOS,
@@ -326,7 +327,11 @@ class Project:
         height (cap = 1.0). It is derived from the project's calibrated
         ``kind_ratios``. See :func:`letter_kinds.word_scale_factor`.
         """
-        kinds = tuple(Kind(k) for k in word_kinds if k)
+        # word_kinds may contain Kind enum values and/or synthetic string
+        # keys (e.g. CAPITAL_ASCENDER_KEY). Keep strings as-is; only
+        # convert values that are valid Kind enum members.
+        kinds = tuple(Kind(k) for k in word_kinds if k and not isinstance(k, str))
+        kinds = kinds + tuple(k for k in word_kinds if isinstance(k, str))
         return word_scale_factor(kinds, self.kind_ratios)
 
     def calibrate_kind_ratios(self) -> None:
@@ -355,7 +360,20 @@ class Project:
                 bx, by, bw, bh = inst.bbox
                 top_px = inst.baseline_y - by
                 bot_px = (by + bh) - inst.baseline_y
-                for k in self.letter_kinds_for(inst.char):
+                ch_kinds = self.letter_kinds_for(inst.char)
+                # Capital+ascender (uppercase letter in the ascenders set,
+                # e.g. Ё, Й): bucket its top separately under the synthetic
+                # capital_ascender key — its top sits above the capitals
+                # line, so including it under plain CAPITAL or ASCENDER
+                # would skew those medians. It has no descender component.
+                is_cap_asc = (
+                    Kind.CAPITAL in ch_kinds and Kind.ASCENDER in ch_kinds
+                )
+                if is_cap_asc:
+                    if top_px > 0:
+                        tops[CAPITAL_ASCENDER_KEY].append(float(top_px))
+                    continue
+                for k in ch_kinds:
                     if k in _TOP_KINDS:
                         if top_px > 0:
                             tops[k.value].append(float(top_px))
@@ -394,6 +412,12 @@ class Project:
             m = _median(bots.get(k.value, []))
             if m is not None and m > 0:
                 ratios[k.value] = m / cap_ref
+        # Capital+ascender top (above the capitals line). Calibrated from
+        # committed Ё/Й-style instances; falls back to the default (1.1)
+        # when there are no samples.
+        m = _median(tops.get(CAPITAL_ASCENDER_KEY, []))
+        if m is not None and m > 0:
+            ratios[CAPITAL_ASCENDER_KEY] = m / cap_ref
         self.kind_ratios = ratios
         self.modified_at = time.time()
 

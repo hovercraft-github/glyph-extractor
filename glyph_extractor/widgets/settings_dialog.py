@@ -98,7 +98,7 @@ class SettingsDialog(QDialog):
 
         cls_form = QFormLayout()
         self._asc_edit = QLineEdit(project.ascenders)
-        self._asc_edit.setPlaceholderText("e.g. бвдёйфbdfhklt")
+        self._asc_edit.setPlaceholderText("e.g. бвдёйЙЁфbdfhklt")
         cls_form.addRow("Ascenders:", self._asc_edit)
 
         self._desc_edit = QLineEdit(project.descenders)
@@ -109,8 +109,10 @@ class SettingsDialog(QDialog):
         cls_hint = QLabel(
             "Lowercase letters whose top rises above the x-height are "
             "ascenders; those whose bottom drops below the baseline are "
-            "descenders. A letter in both lists (e.g. ф) is both. All other "
-            "lowercase letters are regular. Not locale-dependent."
+            "descenders. An uppercase letter in the ascenders list (e.g. "
+            "Ё, Й) is a capital+ascender — its top normalizes above the "
+            "capitals line. A letter in both lists (e.g. ф) is both. All "
+            "other lowercase letters are regular. Not locale-dependent."
         )
         cls_hint.setWordWrap(True)
         cls_hint.setStyleSheet("color: gray; font-size: small;")
